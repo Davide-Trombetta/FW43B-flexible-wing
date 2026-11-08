@@ -1,0 +1,11 @@
+# scripts for WSL/Linux always with LF line endings (bash fails on CRLF if edited on Windows)
+*.sh        text eol=lf
+Allmesh     text eol=lf
+Allclean    text eol=lf
+*.py        text eol=lf
+cfd/**      text eol=lf
+# binary files
+*.stl       binary
+*.png       binary
+*.pdf       binary
+*.pptx      binary

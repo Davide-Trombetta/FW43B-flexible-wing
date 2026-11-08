@@ -1,0 +1,93 @@
+# ---------- OpenFOAM: meshes and results (regenerated) ----------
+**/constant/polyMesh/
+**/constant/extendedFeatureEdgeMesh/
+**/constant/triSurface/*.stl
+**/constant/triSurface/*.eMesh
+**/processor*/
+**/postProcessing/
+**/dynamicCode/
+**/log.*
+cfd/**/[1-9]*/
+cfd/**/0.[0-9]*/
+*.foam
+*.OpenFOAM
+
+# ---------- Ansys ----------
+*.rst
+*.rstp
+*.full
+*.db
+*.dbb
+*.esav
+*.emat
+*.mntr
+*.err
+*.out
+*.log
+*.lock
+*.page
+*.stat
+*.BCS
+*.DSP
+*.PCS
+*.mode
+*.ldhi
+*.r00*
+*.osav
+*.rdb
+file*.*
+_files/
+*_files/
+
+# ---------- Abaqus ----------
+*.odb
+*.sim
+*.msg
+*.dat
+*.sta
+*.prt
+*.com
+*.lck
+*.ipm
+*.mdl
+*.stt
+*.res
+*.cid
+*.jnl
+*.rpy*
+abaqus.rpy*
+
+# loads generated from the CFD (recreated with fsi/map_pressure.py)
+loads_pressure_*.inp
+wing_pressure*.csv
+
+
+# ---------- LaTeX ----------
+*.aux
+*.toc
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.bbl
+*.blg
+*.nav
+*.snm
+
+# ---------- Python, editors, OS ----------
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+fastf1_cache/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+~$*
+
+# structural displacement tables (results)
+wing_disp*.csv
+
+# ---------- Other ----------
+**circuits/
