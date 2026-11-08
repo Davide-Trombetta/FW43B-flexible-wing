@@ -1,0 +1,40 @@
+! ======================================================================================
+! FW43B(AR) rear wing - FIRST TEST in Mechanical APDL: self weight only (no CFD loads needed).
+! Same model as run_wing_apdl.inp, without the aerodynamic load step.
+! Files needed in the same folder: materials_laminate_apdl.inp, rw_shell_medium_apdl.inp
+! Expected: total vertical reaction FZ = about 61.5 N (mass about 6.27 kg), FX and FY about 0.
+! ======================================================================================
+/TITLE,FW43B(AR) rear wing - flap -2 deg - self weight test
+/PREP7
+/INPUT,materials_laminate_apdl,inp
+/INPUT,rw_shell_medium_apdl,inp
+CMSEL,S,N_SUPPORT
+D,ALL,UX,0
+D,ALL,UY,0
+D,ALL,UZ,0
+ALLSEL,ALL
+FINISH
+!
+/SOLU
+ANTYPE,STATIC
+OUTRES,ALL,ALL
+ACEL,0,0,9.81            ! gravity along -z
+SOLVE
+FINISH
+!
+/POST1
+SET,1
+CMSEL,S,N_SUPPORT
+/COM, === SELF WEIGHT: reaction forces at the supports (expected total FZ about 61.5 N) ===
+PRRSOL,F
+ALLSEL,ALL
+/COM, === maximum displacement ===
+NSORT,U,SUM
+*GET,UMAX,SORT,0,MAX
+/COM, maximum total displacement [m]:
+*STATUS,UMAX
+NUSORT
+! plot of the deformed shape (in the GUI)
+/VIEW,1,-1,-1.15,0.6
+PLNSOL,U,SUM,1
+FINISH
