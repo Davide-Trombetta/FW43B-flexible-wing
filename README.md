@@ -13,7 +13,6 @@ Mechanical APDL, one-way fluid–structure coupling, and a flap-angle study on t
 | `cfd/` | The full CFD case with OpenFOAM goes here |
 | `structure/flap_<angle>deg/` | ready-to-run Ansys Mechanical APDL model for each flap angle |
 | `fsi/` | load transfer CFD → structure and displacement transfer structure → CFD mesh |
-| `circuits/` | reference speeds per circuit from the 2021 telemetry (FastF1) |
 | `results/` | summary results only (CSV tables, plots) |
 | `docs/` | figures, slides, report |
 
