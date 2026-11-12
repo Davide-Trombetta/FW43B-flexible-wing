@@ -1,0 +1,51 @@
+#!/bin/sh
+#------------------------------------------------------------------------------
+#  history -- the whole history of a function object, over every restart
+#
+#  Usage: scripts/history <function> <file> [<column> ...]
+#         e.g. scripts/history forceCoeffs coefficient.dat Cd Cl
+#              scripts/history solverInfo solverInfo.dat p_initial Ux_initial
+#
+#  OpenFOAM writes a new folder postProcessing/<function>/<startTime>/ at each
+#  restart (Allrun -continue). The folders are read in time order and the
+#  data lines are printed once per time: where two folders overlap (the
+#  restart time is written by both), the later one wins. Header lines (#)
+#  are left out. Used by scripts/report and scripts/convergenceMonitor, so
+#  both see exactly the same history.
+#
+#  <file> may list alternatives, the first one found is used:
+#  "coefficient.dat|forceCoeffs.dat".
+#  <column>: with column names, only the time and these columns are
+#  printed, in this order, found by name in the header line "# Time ..." of
+#  the file; alternatives "CmPitch|Cm" take the first name found, a missing
+#  column prints N/A. Why: ESI v2306 writes the columns in its own order and
+#  with its own names (coefficient.dat: Cd ... Cl ... CmPitch; force.dat:
+#  total_x ... pressure_x ... viscous_x; solverInfo.dat: Ux_initial ...),
+#  different from OpenFOAM.org (forceCoeffs.dat: Cm Cd Cl), so the scripts
+#  ask for columns by name and never by position.
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+FUNC=$1; FILES=$2; shift 2
+NAME=""
+for f in $(echo "$FILES" | tr '|' ' '); do
+    ls postProcessing/$FUNC/*/$f > /dev/null 2>&1 && { NAME=$f; break; }
+done
+[ -n "$NAME" ] || exit 0
+ls postProcessing/$FUNC/*/$NAME | awk -F/ '{ print $3, $0 }' |
+    sort -g | cut -d' ' -f2 | xargs -r cat |
+    awk -v want="$*" '
+        BEGIN { nw = split(want, w, " ") }
+        # header "# Time name1 name2 ...": position of each wanted column
+        /^#/ { line = $0; sub(/^#[ \t]*/, "", line); split(line, h, /[ \t]+/)
+               if (h[1] == "Time" && nw) {
+                   for (j = 1; j <= nw; j++) {
+                       c[j] = 0; na = split(w[j], alt, "|")
+                       for (a = 1; a <= na && !c[j]; a++)
+                           for (i = 1; i in h; i++) if (h[i] == alt[a]) { c[j] = i; break }
+                   } }
+               next }
+        NF { if (nw) { out = $1
+                       for (j = 1; j <= nw; j++) out = out " " (c[j] ? $(c[j]) : "N/A") }
+             else out = $0
+             if (!($1 in v)) o[++n] = $1; v[$1] = out }
+        END { for (i = 1; i <= n; i++) print v[o[i]] }'

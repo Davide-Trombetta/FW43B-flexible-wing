@@ -1,0 +1,29 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Forces and moments on the wing, every iteration, total, pressure and
+// viscous parts: postProcessing/forces/<start>/force.dat, moment.dat
+//     Time total_x total_y total_z pressure_x ... viscous_x ...   [N], [N m]
+// (OpenFOAM.org: one file forces.dat with ((Fp) (Fv)) ((Mp) (Mv)))
+// The pressure is kinematic: rhoInf (system/meshParameters) gives newtons.
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshParameters"
+#include "meshVariables"
+
+type            forces;
+libs            (forces);
+writeControl    timeStep;
+writeInterval   1;
+log             false;
+
+patches         $wallPatches;
+rho             rhoInf;         // kinematic pressure: rho = rhoInf
+rhoInf          $rhoInf;
+CofR            ($xCofR $yCentre $zCofR);   // as in forceCoeffs
+
+// ************************************************************************* //

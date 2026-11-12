@@ -1,0 +1,115 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+#  convergenceMonitor -- stops the simulation when the mean Cd is known with
+#                        the accuracy asked for (started in the background by
+#                        Allrun, stopped by it when the solver ends)
+#
+#  Usage: scripts/convergenceMonitor        (from Allrun; nothing to do by hand)
+#
+#  In:   postProcessing/forceCoeffs/*/coefficient.dat (every restart folder;
+#        columns by name: coeffHistory in scripts/functions)
+#        constant/caseSettings: cdTolerance (no entry: the run goes to endTime)
+#                               minStableIterations (no entry: no minimum)
+#  Out:  log.convergence, one line per check
+#        system/controlDict: stopAt writeNow when converged (Allrun puts
+#        stopAt endTime back afterwards)
+#
+#  Every check (about once a minute), with the same code as scripts/report
+#  (scripts/history for the history, tools/mser.awk for the statistics):
+#  1. start of the stable part with the MSER rule (see tools/mser.awk). If
+#     it is at the end of the first half, either the transient is not over
+#     or the history still drifts very slowly: when Cd and Cl are very
+#     steady, MSER keeps cutting to remove even a tiny trend. The checks
+#     below are then made on the second half of the history: the run stops
+#     only if that drift is within the tolerance, otherwise it goes on.
+#  2. uncertainty of the mean Cd over the stable part: standard error with
+#     the method of batch means (see tools/mser.awk).
+#  3. the stable part must be at least minStableIterations long: a flat
+#     stretch of Cd can be a pause of a flow still forming (the wake takes
+#     hundreds to thousands of iterations); statistics on a short window
+#     cannot see it. The value is a choice (constant/caseSettings),
+#     based on the earlier runs.
+#  4. converged when, with the same tolerance cdTolerance:
+#     - standard error / |mean Cd| <= cdTolerance, for Cd and for Cl (Cl on
+#       the scale of Cd, since Cl can be close to zero: an oscillating Cl
+#       with a flat Cd is not converged)
+#     - no drift, for Cd and for Cl: the means of the two halves of the
+#       stable part differ by less than cdTolerance * |mean Cd| (Cl on the
+#       scale of Cd, since Cl can be close to zero), or the difference is
+#       within their scatter (t test, 95 %: slow oscillations are not a
+#       drift). A slow drift can look flat to MSER and give a small standard
+#       error.
+#
+#  Then the run is asked to write its fields and stop (stopAt writeNow,
+#  read by the solver at the next iteration since runTimeModifiable is on).
+#  endTime stays as an upper bound. The report then finds the same stable
+#  part (same MSER rule) and gives the same mean.
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+. scripts/functions
+
+rm -f log.convergence logs/log.convergence   # never the one of an older run
+
+# settings (constant/caseSettings), both optional
+TOL=$(foamDictionary -entry cdTolerance -value constant/caseSettings 2> /dev/null)
+[ -n "$TOL" ] || exit 0                      # no tolerance: the run goes to endTime
+MINSTABLE=$(foamDictionary -entry minStableIterations -value constant/caseSettings 2> /dev/null)
+MINSTABLE=${MINSTABLE:-0}                    # no entry: no minimum length
+
+CHECK=${MONITOR_CHECK:-60}   # seconds between two checks 
+LOG=log.convergence
+echo "convergence monitor: stop when the stable part is >= $MINSTABLE iterations, the standard errors of the means and the drifts of Cd and Cl are <= $TOL of the mean Cd" > $LOG
+
+abs () { calc "($1) < 0 ? -($1) : ($1)"; }   # absolute value
+pct () { fmt 2 "100 * $1"; }                 # fraction -> percent, 2 decimals
+sig () { [ "$1" = 1 ] && echo " (significant)"; }
+
+while sleep $CHECK; do
+    # the whole history (every restart folder) and its statistics, with the
+    # same code as scripts/report (scripts/history, tools/mser.awk):
+    # FROM FROMCD FROMCL UNSTABLE N CDMEAN CDSE CLMEAN CLSE CDDRIFT CDSIG CLDRIFT CLSIG
+    set -- $(coeffHistory | awk -v cd=3 -v cl=4 -v drift=1 -f tools/mser.awk)
+    FROM=$1; UNSTABLE=$4; N=$5; CD=$6; SE=$7; CLSE=$9
+    CDDRIFT=${10}; CDSIG=${11}; CLDRIFT=${12}; CLSIG=${13}
+    # last iteration: first column of the last row of the history
+    LAST=$(coeffHistory | tail -1 | awk '{ print $1 }')
+
+    if [ -z "$FROM" ] || check "${SE:--1} < 0"; then
+        RES="running: too few iterations"
+    elif [ "$N" -lt "$MINSTABLE" ]; then
+        RES="running: stable from iteration $FROM, $N of the $MINSTABLE stable iterations asked (minStableIterations), iteration $LAST"
+    else
+        # every quantity as a fraction of |mean Cd| (Cl too: it is close to zero)
+        A=$(abs $CD)
+        R=$(calc "$SE / $A")                  # standard error of the mean Cd
+        Q=$(calc "$CLSE / $A")                # standard error of the mean Cl
+        RC=$(calc "$(abs $CDDRIFT) / $A")     # drift of Cd: 2nd half - 1st half
+        RL=$(calc "$(abs $CLDRIFT) / $A")     # drift of Cl
+        # converged: standard errors within the tolerance, and no drift that
+        # is both significant (t test) and larger than the tolerance
+        OK=yes
+        check "$R > $TOL" && OK=no
+        check "$Q > $TOL" && OK=no
+        [ "$CDSIG" = 1 ] && check "$RC > $TOL" && OK=no
+        [ "$CLSIG" = 1 ] && check "$RL > $TOL" && OK=no
+        DRIFTS="drift Cd $(pct $RC) %$(sig $CDSIG) Cl $(pct $RL) %$(sig $CLSIG)"
+        if [ $OK = no ] && [ "$UNSTABLE" = 1 ]; then
+            # MSER start at the end of the first half and not converged:
+            # the transient (or a drift larger than the tolerance) goes on
+            RES="running: transient (MSER start at the end of the first half, iteration $FROM of $LAST; Cd $(fmt 4 $CD), $DRIFTS)"
+        else
+            [ $OK = yes ] && RES="converged" || RES="running"
+            RES="$RES: Cd $(fmt 4 $CD) +- $(fmt 4 $SE) ($(pct $R) %), Cl +- $(fmt 4 $CLSE) ($(pct $Q) % of Cd), $DRIFTS, stable from iteration $FROM of $LAST"
+            [ "$UNSTABLE" = 1 ] &&
+                RES="$RES (MSER start at the end of the first half: a slow drift within the tolerance)"
+        fi
+    fi
+    echo "$(date +%H:%M:%S) $RES" >> $LOG
+
+    case "$RES" in
+        converged*)
+            setEntry stopAt writeNow system/controlDict
+            echo "$(date +%H:%M:%S) stopAt writeNow: the run writes and stops" >> $LOG
+            exit 0 ;;
+    esac
+done

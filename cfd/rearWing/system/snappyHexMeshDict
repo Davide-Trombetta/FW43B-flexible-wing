@@ -1,0 +1,191 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      snappyHexMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#includeEtc "caseDicts/mesh/generation/snappyHexMeshDict.cfg"
+
+// values chosen by hand and values computed by the scripts in scripts/
+#include "meshParameters"
+#include "meshVariables"
+#include "stlRegions"          // the regions of the STL (scripts/geometryInfo)
+#include "rearRegions"
+
+castellatedMesh true;
+snap            true;
+addLayers       true;
+
+geometry
+{
+
+    wallSurface                 // the STL; each region (solid) becomes a
+    {                           // patch with its name
+        type triSurfaceMesh;        // OpenFOAM.org: triSurface
+        file $stlFile;              // in constant/triSurface (.org: constant/geometry)
+        name wallSurface;
+        regions
+        {
+            $wallGeometry;
+        }
+    }
+
+    // Analytical shape; cylinder, sphere
+    refinementBox
+    {
+        type box;
+        min ($nearXmin $nearYmin $nearZmin);
+        max ($nearXmax $nearYmax $nearZmax);
+    }
+    wakeBox
+    {
+        type box;
+        min ($wakeXmin $wakeYmin $wakeZmin);
+        max ($wakeXmax $wakeYmax $wakeZmax);
+    }
+    
+    $rearGeometry;
+};
+
+// Settings for the castellatedMesh generation.
+castellatedMeshControls
+{
+
+    // Refinement parameters
+    // ~~~~~~~~~~~~~~~~~~~~~
+
+    maxLocalCells 100000;
+
+    maxGlobalCells $maxGlobalCells;
+
+    minRefinementCells 10;
+
+    maxLoadUnbalance 0.10;
+
+    nCellsBetweenLevels $nCellsBetweenLevels;
+
+
+    features
+    (
+        {
+            file $eMeshFile;
+            level $levelSurface;
+        }
+
+    );
+
+    refinementSurfaces
+    {
+        wallSurface
+        {
+            level (0 0);
+
+            regions             // every region: level of the surface, wall
+            {                   // in the group "walls" (0.orig)
+                $wallSurfaces;
+            }
+        }
+    }
+
+    // Resolve sharp angles
+    //resolveFeatureAngle 10;
+
+    refinementRegions
+    {
+        // ESI: "levels ((distance level))" also for mode inside, the
+        // distance being ignored (OpenFOAM.org: "level <n>")
+        refinementBox
+        {
+            mode inside;
+            levels    ((1e15 $levelNear));
+        }
+        wakeBox
+        {
+            mode inside;
+            levels    ((1e15 $levelWake));
+        }
+        wallSurface
+        {
+            mode distance;
+            levels    (($shellDistance $levelSurface));
+        }
+        $rearRegions;
+    }
+
+    locationInMesh ($insideX $insideY $insideZ);   // OpenFOAM.org: insidePoint
+}
+
+
+// Settings for the snapping.
+snapControls
+{
+    nSmoothPatch 2;
+
+    // relative to cell size
+    tolerance 2.0;
+
+    //- Number of mesh displacement relaxation iterations.
+    nSolveIter $nSolveIter;
+
+    //- Maximum number of snapping relaxation iterations. Should stop
+    //  before upon reaching a correct mesh.
+    nRelaxIter 5;
+
+    // Feature snapping
+
+    //- Number of feature edge snapping iterations.
+    //  Leave out altogether to disable.
+    nFeatureSnapIter 10;
+
+    //- Detect (geometric only) features by sampling the surface
+    //  (default=false).
+    implicitFeatureSnap false;
+
+    //- Use castellatedMeshControls::features (default = true)
+    explicitFeatureSnap true;
+
+    //- Detect points on multiple surfaces (only for explicitFeatureSnap)
+    multiRegionFeatureSnap false;
+}
+
+
+addLayersControls
+{
+    layers                      // every region of the STL
+    {
+        $wallLayers;
+    }
+
+    // absolute sizes: the same layers for S, M and L (scripts/snappySetup)
+    relativeSizes       off;
+    firstLayerThickness $firstLayerMesh;   // [m], from the target y+
+    expansionRatio      $expansionRatio;
+    minThickness        $firstLayerMesh;   // [m], at least one layer
+    maxThicknessToMedialRatio 0.6;
+    // the other layer controls (featureAngle, nGrow, nSmooth*, nLayerIter...)
+    // are the defaults of etc/caseDicts/mesh/generation/snappyHexMeshDict.cfg
+}
+
+// meshQualityControls: system/meshQualityDict, included by the cfg file above
+
+writeFlags
+(
+    scalarLevels
+    layerFields
+);
+
+mergeTolerance 1e-6;
+
+// ************************************************************************* //

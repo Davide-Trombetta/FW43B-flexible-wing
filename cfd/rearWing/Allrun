@@ -1,0 +1,146 @@
+#!/bin/sh
+cd "${0%/*}" || exit 1    # Run from this directory
+
+# Source tutorial run functions (ESI v2306: $WM_PROJECT_DIR/bin/tools)
+. "$WM_PROJECT_DIR/bin/tools/RunFunctions"
+
+#- the solver of system/controlDict (application): simpleFoam
+#  (OpenFOAM.org: foamRun -solver incompressibleFluid)
+SOLVER=$(foamDictionary -disableFunctionEntries -entry application -value system/controlDict 2> /dev/null)
+SOLVER=${SOLVER:-simpleFoam}
+
+# setKeyword <entry> <value> <dict>: replaces the value of a top-level line
+# with sed (ESI foamDictionary -set would rewrite the file without comments)
+setKeyword () {
+    sed -i "s|^\([[:space:]]*$1[[:space:]]\{1,\}\)[^;]*;|\1$2;|" "$3"
+}
+
+#- the logs are written in the case directory, as usual (follow the solver
+#  with: tail -f log.simpleFoam), and moved into logs/ when this script ends,
+#  also on an error or on Ctrl+C
+moveLogs () { mkdir -p logs && mv log.* logs/ 2> /dev/null; }
+
+#- a stop asked by scripts/convergenceMonitor (stopAt writeNow) must not stop
+#  the next run: stopAt endTime is always put back, also on an error or Ctrl+C
+restoreStop () {
+    grep -q "^stopAt[[:space:]]*writeNow;" system/controlDict &&
+        setKeyword stopAt endTime system/controlDict
+    return 0
+}
+trap 'restoreStop; moveLogs' EXIT
+trap 'exit 1' INT TERM
+
+usage () {
+    exec 1>&2
+    while [ "$#" -ge 1 ]; do echo "$1"; shift; done
+    cat <<USAGE
+
+Usage: ${0##*/} [OPTIONS]
+options:
+  -continue            continues from the latest time already written
+  -s | -speed <U>      free-stream velocity [m/s]: written as uInf in
+                       system/meshParameters before the run (the mesh is not
+                       changed: its first layer was designed for the uInf of
+                       Allrun.pre, see the y+ of the report)
+  -h | -help           help
+
+Runs $SOLVER on the mesh of Allrun.pre: initial field (potentialFoam), run
+until the mean Cd and Cl are converged (scripts/convergenceMonitor), checks,
+results report (report/results/results.pdf).
+
+USAGE
+    exit 1
+}
+
+continue=false
+speed=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+    -continue) continue=true; shift ;;
+    -s | -speed)
+        [ "$#" -ge 2 ] || usage "'$1' option requires an argument"
+        speed=$2; shift 2
+        echo "$speed" | grep -qE '^[0-9]+([.][0-9]*)?$' || usage "Invalid speed '$speed'"
+        ;;
+    -h | -help) usage ;;
+    *) usage "Invalid option '$1'" ;;
+    esac
+done
+
+[ -d processor0 ] || { echo "no decomposed mesh: run ./Allrun.pre first"; exit 1; }
+
+#- the speed of this run: uInf is the only place it is written (fields,
+#  forceCoeffs, Cp read it from system/meshParameters)
+if [ -n "$speed" ]; then
+    [ "$continue" = true ] && { echo "-speed with -continue: start a new run"; exit 1; }
+    setKeyword uInf "$speed" system/meshParameters
+    echo "uInf = $speed m/s (system/meshParameters)"
+fi
+
+#- new run: remove results of previous runs and restore the initial fields
+#  of 0.orig in processor*/0 (uniform values and patch groups: valid for any
+#  decomposition and for the patches added by snappyHexMesh); the mesh in
+#  processor*/constant and the layer fields of snappyHexMesh are kept
+if [ "$continue" = false ]; then
+    rm -rf processor*/[1-9]* processor*/0.[0-9]* postProcessing report/results \
+           log.$SOLVER logs/log.$SOLVER logs/log.resultsReport
+    for d in processor*; do
+        rm -f $d/0/phi $d/0/Phi
+        cp 0.orig/* $d/0/
+    done
+fi
+
+#- -continue: the new iterations are added to the log of the previous run
+[ "$continue" = true ] && [ -f logs/log.$SOLVER ] && [ ! -f log.$SOLVER ] &&
+    mv logs/log.$SOLVER .
+
+#- new run: initial field from potentialFoam (potentialInit yes in
+#  constant/caseSettings): a mass-conserving flow around the wing instead of
+#  the uniform free stream through it, for a calmer and shorter start-up.
+#  0.orig/Phi gives the potential its boundary conditions (ESI potentialFoam
+#  reads Phi if present, otherwise it takes the types of p); -writep also
+#  writes the potential pressure (as the solver of OpenFOAM.org does).
+#  Never with -continue: it would overwrite the solution.
+potentialInit=$(foamDictionary -entry potentialInit -value constant/caseSettings 2> /dev/null)
+if [ "$continue" = false ] && [ "$potentialInit" = yes ]; then
+    [ -f 0.orig/Phi ] || { echo "potentialInit yes but 0.orig/Phi is missing"; exit 1; }
+    rm -f log.potentialFoam             # runParallel skips a command whose log exists
+    runParallel potentialFoam -writep
+    tail -5 log.potentialFoam | grep -q "^End" ||
+        { echo "potentialFoam failed: see logs/log.potentialFoam"; exit 1; }
+fi
+
+#- main part: until endTime, or earlier when the mean Cd is known within
+#  cdTolerance (constant/caseSettings): scripts/convergenceMonitor checks the
+#  history in the background and asks the solver to write and stop
+scripts/convergenceMonitor &
+MONITOR=$!
+runParallel -append $SOLVER
+kill $MONITOR 2> /dev/null
+restoreStop                             # stopAt endTime again
+[ -f log.convergence ] && tail -1 log.convergence
+
+#- quality control: solver failures and missing outputs are detected; the
+#  report is written anyway (results up to the last time written), and the
+#  script then ends with an error
+FAILED=""
+# (not "Floating point exception" alone: ESI prints "Floating point exception
+#  trapping enabled" in the header of every log)
+grep -qE "FOAM FATAL|sigFpe::sigHandler|Floating point exception \(core" log.$SOLVER &&
+    FAILED="$SOLVER stopped with an error"
+grep -qwi "nan" log.$SOLVER && FAILED="NaN in log.$SOLVER"
+tail -5 log.$SOLVER | grep -q "^End" || FAILED="${FAILED:-$SOLVER did not reach its end}"
+ls postProcessing/forceCoeffs/*/coefficient.dat postProcessing/forceCoeffs/*/forceCoeffs.dat \
+    > /dev/null 2>&1 || ls postProcessing/forceCoeffs/*/*.dat > /dev/null 2>&1 ||
+    FAILED="${FAILED:-no forceCoeffs output}"
+
+#- results report: report/results/results.pdf, with metadata.yaml and
+#  summary.csv (the run in one line); open the PDF yourself
+moveLogs
+scripts/report results > logs/log.resultsReport 2>&1
+tail -2 logs/log.resultsReport
+[ -f report/results/summary.csv ] || FAILED="${FAILED:-no results summary}"
+if [ -n "$FAILED" ]; then
+    echo "RUN FAILED: $FAILED (see logs/)"
+    exit 1
+fi

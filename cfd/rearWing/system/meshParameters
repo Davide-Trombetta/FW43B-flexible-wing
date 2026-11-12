@@ -1,0 +1,100 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// meshParameters -- the only values chosen by hand.
+// Included by the mesh dictionaries (#include "meshParameters") and read by
+// the scripts in scripts/, which compute all the other values and write them
+// in system/meshVariables.
+// No FoamFile header: the file is also #included inside other dictionaries.
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// Geometry
+caseTitle           "FW43B rear wing";  // title of the reports
+stlFile             "rearWing.stl";     // in constant/triSurface (Allrun.pre
+                                        // -angle copies the STL of that angle)
+eMeshFile           "rearWing.eMesh";   // written by surfaceFeatureExtract
+includedAngle       150;    // surfaceFeatureExtract: edge if angle between
+                            // faces is below this value [deg]
+// Every region (solid) of the STL becomes a wall patch with its name
+// (written by scripts/geometryInfo in system/stlRegions and wallPatches).
+// The flow is along +x, z is up.
+refRegion           (rearWing_mainPlane rearWing_flap);
+                            // STL region(s) that give the reference height
+                            // H: here the two wing elements (profile height)
+halfModel           no;     // yes: the STL is cut by the symmetry plane at
+                            // its y min and only that half is simulated;
+                            // no: whole wing (needed by fsi/map_pressure.py,
+                            // which loads the whole shell model)
+groundContact       no;     // yes: the body stands on the ground; no: free
+groundGap           8;      // groundContact no: domain bottom this many H
+                            // below the lowest point of the STL
+groundPlane         none;   // wall: the domain bottom is a no-slip ground;
+                            // none: free stream (isolated wing, no car)
+
+rearRefinement      no;     // Ahmed-body slant refinement: not for the wing
+rearDistance        0.1;    // thickness of the refined region          [H]
+rearUpstream        0.25;   // roof included before the slant edge      [H]
+
+// Wake refinement of each mesh size (scripts/snappySetup): 1 raises the
+// wake box by one level (cells half as large). 0 for all sizes: the same
+// refinement ratio everywhere between S, M and L (grid study, GCI); 1 on L
+// would add about 20 million cells to it.
+wakeLevelsS         0;
+wakeLevelsM         0;
+wakeLevelsL         0;
+wakeRise            1.5;    // wake box above the top of the wing      [H]
+                            // (the wake of a downforce wing goes up)
+nearLevelDrop       2;      // near box: levelSurface - nearLevelDrop
+wakeLevelDrop       3;      // wake box: levelSurface - wakeLevelDrop
+                            // (Ahmed body: 1 and 2; the wing has mm surface
+                            // cells, here 4 and 8 times smaller than the
+                            // cells of the boxes)
+
+// Flow (ISA sea level). uInf: the speed of the run; Allrun -speed <U> sets it
+uInf                70;     // free-stream velocity [m/s]
+nu                  1.46e-5; // kinematic viscosity [m^2/s]
+rhoInf              1.225;  // air density [kg/m^3]: the solver uses kinematic
+                            // pressure; only forces and fsi/map_pressure.py
+                            // use it (newtons, pascals)
+
+// Near-wall mesh
+cf                  0.003;  // assumed local skin-friction coefficient
+yPlus               100;      // target y+ of the first cell centre
+nWallLayers         4;     // layers on every wall, the same for S, M, L
+
+// last layer / surface cell, for each mesh size (scripts/boundaryLayer):
+//     surface cell = last layer / finalLayerThickness
+// Each value must be below 1 and larger than the previous one; the ratio
+// between two of them is the refinement ratio (at least 1.3 for a GCI study).
+finalLayerThicknessS 0.33;
+finalLayerThicknessM 0.462;
+finalLayerThicknessL 0.647;
+expansionRatio      1.2;    // growth ratio between layers
+
+// Domain (L = wing length along x, W = half span, H = height of refRegion)
+upstream            3;      // domain length before the leading point   [L]
+downstream          7;      // domain length after the trailing point   [L]
+domainWidth         5;      // centre plane -> side wall (each side)    [W]
+domainHeight        21;     // domain bottom -> top wall                [H]
+blockage            0.05;   // maximum frontal area / cross-section (checked)
+
+// Reference area of the coefficients (forceCoeffs): planform (projection on
+// the x-y plane) or frontal (projection on the y-z plane)
+refArea             planform;
+
+// snappyHexMesh
+nCellsBetweenLevels 3;
+minDimCells         10;     // background cells across the smallest domain side
+maxGlobalCells      80000000;
+
+// Post-processing (scripts/postSetup)
+sectionY            0.5;    // wing section of the images and of the wake
+                            // profiles, at y = centre + sectionY W (0.5:
+                            // mid half-span, away from the DRS pod)
+nPlanes             16;     // planes per direction in the results report
+
+// ************************************************************************* //

@@ -1,0 +1,21 @@
+#!/bin/sh
+cd "${0%/*}" || exit 1    # Run from this directory
+
+# Source tutorial clean functions (ESI v2306)
+. "$WM_PROJECT_DIR/bin/tools/CleanFunctions"
+
+# Delete the following:
+# - time directories
+# - constant/polyMesh directory
+# - postProcessing and VTK directories
+# - log files
+# - field files with a ".orig" backup
+cleanCase
+
+# logs, reports, the eMesh and obj files of surfaceFeatureExtract
+# (system/meshVariables, stlRegions, regionForces are kept: the dictionaries
+# include them; the STL of the angle, constant/triSurface/rearWing.stl, is
+# kept too: Allrun.pre -angle replaces it)
+rm -rf 0 problemFaces badFaces report logs tools/stlInfo/build \
+       constant/triSurface/*.eMesh constant/triSurface/*.obj \
+       constant/triSurface/rearSurface.stl constant/extendedFeatureEdgeMesh

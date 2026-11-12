@@ -1,0 +1,45 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Iso-surfaces of the vortical structures (results report), with U for the
+// colour (|U|/Uinf):
+//   Q   = qIso = QStar (uInf/H)^2   (scripts/postSetup, QStar in
+//                                    constant/caseSettings)
+//   Cp0 = 0                         (total-pressure loss of the free stream)
+// Q and Cp0 are computed first (system/reportFunctions)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshVariables"
+
+type            surfaces;
+libs            (sampling);
+writeControl    writeTime;
+surfaceFormat   vtk;
+formatOptions   { vtk { legacy true; format binary; } }
+interpolationScheme cellPoint;
+
+fields          (U);
+
+surfaces
+{
+    Q
+    {
+        type            isoSurface;
+        isoField        Q;
+        isoValue        $qIso;
+        interpolate     true;
+    }
+    Cp0
+    {
+        type            isoSurface;
+        isoField        Cp0;
+        isoValue        0;
+        interpolate     true;
+    }
+}
+
+// ************************************************************************* //

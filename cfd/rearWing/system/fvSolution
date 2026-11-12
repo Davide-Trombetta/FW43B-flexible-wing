@@ -1,0 +1,79 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+solvers
+{
+    "(p|Phi)"                               // symmetric matrix: multigrid
+    {
+        solver           GAMG;
+        smoother         DICGaussSeidel;
+        tolerance        1e-6;
+        relTol           0.05;      
+        maxIter          50;        
+        minIter          3;         
+                                    
+    }
+
+    "(U|k|omega|epsilon)"           // asymmetric matrices
+    {
+        solver           smoothSolver;
+        smoother         GaussSeidel;
+        nSweeps          2;
+        tolerance        1e-8;
+        relTol           0.1;
+    }
+}
+
+potentialFlow
+{
+    nNonOrthogonalCorrectors 5;   // Laplace equation for Phi: corrections for the non-orthogonal snapped cells
+}
+
+SIMPLE
+{
+    nNonOrthogonalCorrectors 1; 
+    consistent yes;    
+
+    residualControl
+    {
+        p               1e-4;
+        U               1e-4;
+        "(k|omega|epsilon)" 1e-4;
+    }
+}
+
+
+relaxationFactors
+{
+    //fields
+    //{
+    //    p               0.3;
+    //}
+    equations
+    {
+        U               0.9;    
+        k               0.9;    
+        "(omega|epsilon)" 0.9;  
+    }
+}
+
+cache
+{
+    grad(U);
+}
+
+// ************************************************************************* //

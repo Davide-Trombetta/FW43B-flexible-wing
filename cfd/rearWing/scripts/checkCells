@@ -1,0 +1,53 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+#  checkCells -- estimates the number of cells before running snappyHexMesh
+#
+#  Usage: scripts/checkCells <nCores>
+#
+#  In:   system/meshParameters (maxGlobalCells), system/meshVariables
+#  Out:  system/meshVariables (estimatedCells); exit 1 if the mesh would not fit
+#
+#  Estimate (upper bound: nested regions are counted more than once):
+#    background     nx ny nz
+#    wake box       volume / (cell of levelWake)^3
+#    near box       volume / (cell of levelNear)^3
+#    shell          wetted area x shell distance / surfaceCell^3
+#    layers         (wetted area / surfaceCell^2) faces x nLayers
+#    rear           rear area x rear distance / (surfaceCell/2)^3 (slant,
+#                   scripts/rearRefinement), and its extra layer faces
+#  Checks:
+#    estimate <= maxGlobalCells (otherwise snappyHexMesh stops refining
+#                                silently and the mesh is not the designed one)
+#    estimate <= 15 million cells every 8 cores (memory)
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+. scripts/functions
+
+NCORES=${1:?usage: checkCells <nCores>}
+
+CWAKE=$(calc "$backgroundCell / 2^$levelWake")
+CNEAR=$(calc "$backgroundCell / 2^$levelNear")
+C_BACK=$((nx * ny * nz))
+C_WAKE=$(round "($wakeXmax - $wakeXmin) * ($wakeYmax - $wakeYmin) * ($wakeZmax - $wakeZmin) / $CWAKE^3")
+C_NEAR=$(round "($nearXmax - $nearXmin) * ($nearYmax - $nearYmin) * ($nearZmax - $nearZmin) / $CNEAR^3")
+C_SHELL=$(round "$wettedArea * $shellDistance / $surfaceCell^3")
+C_LAYERS=$(round "$wettedArea / $surfaceCell^2 * $nLayers")
+C_REAR=0
+if [ -n "$levelRear" ] && [ "$levelRear" != none ]; then
+    C_REAR=$(round "$rearArea * $rearDistanceMesh / ($surfaceCell / 2)^3 + 3 * $rearArea / $surfaceCell^2 * $nLayers")
+fi
+setVar estimatedCells $((C_BACK + C_WAKE + C_NEAR + C_SHELL + C_LAYERS + C_REAR))
+LIMIT=$((15000000 * NCORES / 8))
+
+echo "estimated cells: $estimatedCells (background $C_BACK, wake $C_WAKE, near $C_NEAR, shell $C_SHELL, layers $C_LAYERS, rear $C_REAR)"
+if [ "$estimatedCells" -gt "$LIMIT" ]; then
+    echo "too large for $NCORES cores (limit 15M cells every 8 cores = $LIMIT):"
+    echo "use more cores or a smaller size."
+    exit 1
+fi
+if [ "$estimatedCells" -gt "$maxGlobalCells" ]; then
+    echo "above maxGlobalCells = $maxGlobalCells: snappyHexMesh would stop refining"
+    echo "before the end. Raise maxGlobalCells (and the cores) or use a smaller size."
+    exit 1
+fi
+echo "OK: below maxGlobalCells = $maxGlobalCells and the limit for $NCORES cores ($LIMIT)"

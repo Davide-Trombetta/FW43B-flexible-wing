@@ -1,0 +1,648 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+#  report -- mesh and results
+#
+#  Usage: scripts/report mesh       mesh report    (end of Allrun.pre)
+#         scripts/report [results]  results report (end of Allrun)
+#
+#  In:   logs/log.* (snappyHexMesh, checkMesh, simpleFoam), report/mesh/fig/mesh_*.png
+#        (viewMesh.py), postProcessing/ (functions of system/functions),
+#        system/meshParameters, system/meshVariables,
+#        constant/caseSettings (CdReference, optional),
+#        constant/triSurface/flapAngle (written by Allrun.pre -angle)
+#  Out:  report/mesh/mesh.pdf          (and mesh.tex, fig/)
+#        report/results/results.pdf    (and results.tex, fig/, CSV data)
+#        each report rewrites only its own folder
+#
+#  Tools: ParaView pvbatch (images: tools/report/images.py, charts:
+#         tools/report/plots.py), pdflatex (PDF). A missing tool skips its
+#         part, it does not stop.
+#
+#  Images of the results (HPC): ParaView runs on one core, so it never reads
+#  the volume mesh (its time and memory would grow with the number of
+#  cells). The planes, iso-surfaces and streamlines are first extracted by
+#  OpenFOAM, in parallel on the decomposed case and only at the last time
+#  (system/reportFunctions):
+#      mpirun -np <processors> simpleFoam -postProcess -parallel \
+#             -dict system/reportFunctions -latestTime
+#  (OpenFOAM.org: foamPostProcess -solver incompressibleFluid; serial if the
+#  case is not decomposed; skipped if already done for that time). ParaView
+#  then reads only these small files: the images take about the same time
+#  for any mesh size. MPIRUN can replace mpirun; REPORT_PLANES=0 skips the
+#  plane images.
+#
+#  Histories: the columns of the function objects are taken by name
+#  (coeffHistory, forceHistory, scripts/history), since ESI v2306 writes
+#  other files and columns than OpenFOAM.org: coefficient.dat instead of
+#  forceCoeffs.dat, force.dat instead of forces.dat, solverInfo.dat instead
+#  of residuals.dat.
+#
+#  Coefficients: mean, standard deviation, min and max over the stable part
+#  of the history: a
+#  steady RANS starts with a transient from the initial field and then
+#  oscillates slightly around its mean (separation at the flap, wake of the
+#  endplates and of the DRS pod), so a single final value would depend on
+#  where the run stops. The start of the stable
+#  part is found with the MSER rule (Marginal Standard Error Rule, White
+#  1997, the usual method to cut the initial transient of a series): the
+#  first iteration d that minimises  sum_{i>=d} (y_i - mean_d)^2 / (n - d)^2,
+#  i.e. the uncertainty of the mean of what is left. It is computed for Cd
+#  and Cl, and the later of the two is used; d is searched in the first half
+#  of the history, as the rule prescribes (if the minimum is at its end, the
+#  transient is not over in the first half: the run is too short, and the
+#  remedy is more iterations, not a different search range).
+#  CdReference (an experimental value, if known) is only compared with.
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+. scripts/functions
+readDict constant/caseSettings
+
+MODE=${1:-results}
+case "$MODE" in
+    mesh|results) ;;
+    *) echo "Usage: scripts/report [mesh|results]"; exit 1 ;;
+esac
+OUT=report/$MODE
+FIG=$OUT/fig
+# start from an empty folder; the mesh report keeps only the images that
+# viewMesh.py (Allrun.pre) writes directly in report/mesh/fig
+if [ "$MODE" = mesh ] && [ -d $FIG ]; then
+    find $OUT -mindepth 1 -maxdepth 1 ! -name fig -exec rm -rf {} +
+    find $FIG -mindepth 1 ! -name 'mesh_*.png' -exec rm -rf {} +
+else
+    rm -rf $OUT && mkdir -p $FIG
+fi
+
+# logs: in logs/ (moved there at the end of Allrun.pre and Allrun), or still
+# in the case directory if the run was interrupted
+lg () { if [ -f log.$1 ]; then echo log.$1; else echo logs/log.$1; fi; }
+LOGMESH=$(lg snappyHexMesh); LOGCHECK=$(lg checkMesh); LOGRUN=$(lg $SOLVER)
+# flap angle of the STL (Allrun.pre -angle), for the title and the summary
+ANGLE=$(cat constant/triSurface/flapAngle 2> /dev/null)
+[ -n "$ANGLE" ] && ANGLETEX=", flap \\SI{$ANGLE}{\\degree}"
+
+# ParaView without its window; without a display (cluster node, ssh) inside
+# a virtual one (xvfb-run)
+PVBATCH="pvbatch --force-offscreen-rendering"
+[ -z "$DISPLAY" ] && command -v xvfb-run > /dev/null && PVBATCH="xvfb-run -a $PVBATCH"
+command -v pvbatch > /dev/null || PVBATCH=""
+
+fig () {   # fig <file> <caption> [width]: figure only if the image exists
+    [ -f "$FIG/$1.png" ] && cat <<EOF
+\\begin{figure}[H]\\centering
+\\includegraphics[width=${3:-\\textwidth}]{fig/$1.png}
+\\caption{$2}
+\\end{figure}
+EOF
+}
+
+
+# LaTeX preamble and title: preamble <title>
+preamble () {
+cat <<EOF
+\\documentclass[11pt,a4paper]{article}
+\\usepackage[utf8]{inputenc}
+\\usepackage[T1]{fontenc}
+\\usepackage[english]{babel}
+\\usepackage[margin=2cm]{geometry}
+\\usepackage{graphicx,booktabs,float,siunitx}
+\\title{${caseTitle:-CFD case}$ANGLETEX: $1}
+\\author{Generated automatically by \\texttt{scripts/report}}
+\\date{$(date '+%d %B %Y, %H:%M')}
+\\begin{document}
+\\maketitle
+EOF
+}
+
+# pdf: compiles $OUT/$MODE.tex
+pdf () {
+    if command -v pdflatex > /dev/null; then
+        (cd $OUT && pdflatex -interaction=nonstopmode $MODE.tex > log.pdflatex 2>&1)
+        [ -f $OUT/$MODE.pdf ] && echo "report: $OUT/$MODE.pdf" ||
+            echo "pdflatex failed: see $OUT/log.pdflatex"
+        rm -f $OUT/$MODE.aux $OUT/$MODE.log
+    else
+        echo "pdflatex not found: $OUT/$MODE.tex written, no PDF" \
+             "(sudo apt install texlive-latex-recommended texlive-science)"
+    fi
+}
+
+#------------------------------------------------- mesh data (both reports)
+# number of cells: first "cells:" line of checkMesh
+CELLS=$(grep -m1 "cells:" $LOGCHECK 2> /dev/null | awk '{ print $2 }')
+# layers on the reference patch: its row in the last layer table of snappyHexMesh
+REF1=$(echo "$refRegion" | tr -d '()' | awk '{ print $1 }')   # first reference region
+REF1TEX=$(echo "$REF1" | sed 's/_/\\_/g')                       # for LaTeX
+LAYERS=$(grep -E "^$REF1 " $LOGMESH 2> /dev/null | tail -1)
+WALLS=$(echo "$wallPatches" | tr -d '()')         # the STL regions
+WALLSTEX=$(echo "$WALLS" | sed 's/^ *//; s/ *$//; s/_/\\_/g; s/  */, /g')   # for LaTeX
+# half model (symmetry plane): forces of the whole wing = 2 x simulated
+if [ "$halfModel" = yes ]; then FACT=2; else FACT=1; fi
+# average number of layers: 3rd column of that row
+# (ESI: "faces target mesh thickness %", mean = 3rd from the end)
+LAYAVG=$(echo $LAYERS | awk '{ print $(NF - 2) }')
+# cm "<text>" <n>: n-th word of the first checkMesh line with <text>, mesh: checkMesh (quality), snappyHexMesh (steps, layers), meshVariables
+# (ESI writes "***Max skewness = 4.36, 2 highly skew faces" when a check
+#  fails: the trailing comma is removed)
+cm () { grep -m1 "$1" $LOGCHECK 2> /dev/null | awk -v n=$2 '{ x = $n; sub(/,$/, "", x); print x }'; }
+POINTS=$(cm "points:" 2); FACES=$(cm " faces:" 2)
+HEX=$(cm "hexahedra:" 2); PRISM=$(cm "prisms:" 2); POLY=$(cm "polyhedra:" 2)
+ASPECT=$(cm "Max aspect ratio" 5)
+NONORTH=$(cm "non-orthogonality Max" 4); NONAVG=$(cm "non-orthogonality Max" 6)
+# number of severely non-orthogonal faces (the number before the final dot)
+NSEVERE=$(grep -m1 "severely non-orthogonal" $LOGCHECK 2> /dev/null |
+          grep -oE '[0-9]+\.$' | tr -d .)
+SKEW=$(cm "Max skewness" 4)
+if grep -q "^Mesh OK" $LOGCHECK 2> /dev/null; then MESHOK="passed (\\texttt{Mesh OK})"
+else MESHOK="\\textbf{failed}: see \\texttt{log.checkMesh}"; fi
+# cells after each step of snappyHexMesh, and its time
+step () { grep "^$1 mesh :" $LOGMESH 2> /dev/null | tail -1 |
+          grep -oE 'cells:[0-9]+' | cut -d: -f2; }
+CREF=$(step Refined); CSNAP=$(step Snapped); CLAY=$(step Layer)
+# snappyHexMesh wall time [s]: "Finished meshing in = <t> s"
+SNAPT=$(grep "Finished meshing in" $LOGMESH 2> /dev/null | awk '{ print $5 }')
+# layers obtained (last table of snappyHexMesh, the first one is the design)
+# (ESI v2306: "patch faces target mesh [m] [%]", 6 columns; OpenFOAM.org:
+#  "patch faces layers [m] [%]", 5: the last three are always mean layers,
+#  thickness, percentage; rows are those with a number of faces)
+LAYROWS=$(awk '/^patch +faces +layers +overall thickness/ { t = 1; n = 0; rows = ""; next }
+    t && NF == 0 && n { t = 0; next }
+    t && NF >= 5 && $2 ~ /^[0-9]+$/ { n++; name = $1; gsub(/_/, "\\_", name)
+        rows = rows sprintf("\\texttt{%s} & \\num{%s} & %s & \\num{%s} & \\SI{%s}{\\percent} \\\\\n",
+                   name, $2, $(NF - 2), $(NF - 1), $NF) }
+    END { printf "%s", rows }' $LOGMESH 2> /dev/null)
+
+
+#================================================================ mesh report
+if [ "$MODE" = mesh ]; then
+    [ -n "$CELLS" ] || { echo "no checkMesh log: run Allrun.pre first"; exit 1; }
+    # images of viewMesh.py (Allrun.pre), already in $FIG
+    ls $FIG/mesh_*.png > /dev/null 2>&1 ||
+        echo "no $FIG/mesh_*.png: run pvbatch viewMesh.py (see logs/log.viewMesh)"
+
+    { preamble "mesh report"
+      cat <<EOF
+\\section{Design parameters}
+\\begin{table}[H]\\centering
+\\begin{tabular}{ll}\\toprule
+Domain \$x\$, \$y\$, \$z\$ & [\\num{$xMin}, \\num{$xMax}], [\\num{$yMin}, \\num{$yMax}], [\\num{$zMin}, \\num{$zMax}] m \\\\
+Background cell (\\texttt{blockMesh}) & \\SI{$backgroundCell}{m}, $nx \$\\times\$ $ny \$\\times\$ $nz \\\\
+Refinement levels: surface / near box / wake box & $levelSurface / $levelNear / $levelWake \\\\
+Mesh size, \\texttt{finalLayerThickness} & $meshSize, $finalLayerThickness \\\\
+Surface cell size & \\SI{$surfaceCell}{m} \\\\
+Layers: number, first layer, total thickness & $nLayers, \\SI{$firstLayerMesh}{m}, \\SI{$layerStackMesh}{m} \\\\
+Target \$y^+\$ of the first layer, at \$U_\\infty\$ = \\SI{$uInf}{m/s} & $yPlus \\\\
+Cells estimated / obtained & \\num{$estimatedCells} / \\num{${CELLS:-0}} \\\\
+\\texttt{nSolveIter} & $nSolveIter \\\\\\bottomrule
+\\end{tabular}
+\\caption{Values computed by the scripts (\\texttt{system/meshVariables}).}
+\\end{table}
+
+\\section{Generation and quality}
+\\begin{table}[H]\\centering
+\\begin{tabular}{ll}\\toprule
+Cells after refinement / snapping / layers & \\num{${CREF:-0}} / \\num{${CSNAP:-0}} / \\num{${CLAY:-0}} \\\\
+\\texttt{snappyHexMesh} run time & \\SI{${SNAPT:-0}}{s} \\\\
+Points, faces & \\num{${POINTS:-0}}, \\num{${FACES:-0}} \\\\
+Hexahedra / prisms / polyhedra & \\num{${HEX:-0}} / \\num{${PRISM:-0}} / \\num{${POLY:-0}} \\\\
+Non-orthogonality max / average & \\SI{${NONORTH:-0}}{\\degree} / \\SI{${NONAVG:-0}}{\\degree} \\\\
+Faces with non-orthogonality \$>70^\\circ\$ & ${NSEVERE:-0} \\\\
+Max skewness & \\num{${SKEW:-0}} \\\\
+Max aspect ratio & \\num{${ASPECT:-0}} \\\\
+\\texttt{checkMesh} & $MESHOK \\\\\\bottomrule
+\\end{tabular}
+\\caption{From \\texttt{log.snappyHexMesh} and \\texttt{log.checkMesh}. The high aspect ratio belongs to the boundary layers, which are thin by design.}
+\\end{table}
+$([ -n "$LAYROWS" ] && cat <<TAB
+\\begin{table}[H]\\centering
+\\begin{tabular}{lcccc}\\toprule
+Patch & faces & mean layers & thickness [m] & thickness / design \\\\\\midrule
+$LAYROWS
+\\bottomrule
+\\end{tabular}
+\\caption{Layers extruded by \\texttt{snappyHexMesh} (design: $nLayers layers, \\SI{$layerStackMesh}{m}).}
+\\end{table}
+TAB
+)
+$(fig mesh_symmetry "Mesh on the section \\texttt{cutY}: wing, refinement boxes and wake.")
+$(fig mesh_rear "Mesh around the trailing edges and the near wake (boundary layers visible).")
+$(fig mesh_surface "Surface mesh on the walls (\\texttt{$WALLSTEX}).")
+$(fig mesh_layers "Number of layers extruded on each face (blue: none, red: all $nLayers).")
+
+\\end{document}
+EOF
+    } > $OUT/mesh.tex
+    pdf
+    exit 0
+fi
+
+#============================================================= results report
+# dat <function> <file>: rows of postProcessing/<function>/<start>/<file>,
+# all the restarts in time order, without comments
+dat () { scripts/history $1 $2; }      # every restart folder, once per time
+# header <function> <file>: column names of the file
+header () {
+    f=$(ls postProcessing/$1/*/$2 2> /dev/null | head -1)
+    [ -n "$f" ] && grep '^#' "$f" | tail -1 | sed 's/^#//'
+}
+
+# coefficients, columns by name: Time Cm Cd Cl Cl(f) Cl(r) (as forceCoeffs.dat
+# of OpenFOAM.org, so the rest of the report is the same)
+coeffHistory > $OUT/coeffs.dat
+# initial residual of each equation (solverInfo.dat: <field>_initial)
+RESCOLS="p_initial Ux_initial Uy_initial Uz_initial k_initial omega_initial epsilon_initial"
+scripts/history solverInfo solverInfo.dat $RESCOLS > $OUT/residuals.dat
+# forces: Time Fp_x Fp_y Fp_z Fv_x Fv_y Fv_z (force.dat, columns by name)
+forceHistory forces > $OUT/forces.dat
+[ -s $OUT/coeffs.dat ] || { echo "no forceCoeffs results: run the simulation first"; exit 1; }
+
+# last iteration: first column of the last row
+NIT=$(tail -1 $OUT/coeffs.dat | awk '{ print $1 }')
+# start of the stable part (MSER, see the header) and standard errors of the
+# means (batch means): tools/mser.awk, the same code as the convergence
+# monitor (scripts/convergenceMonitor) that may have stopped the run
+read FROM FROMCD FROMCL UNSTABLE WIN CDBM CDSE CLBM CLSE <<< \
+    $(awk -v cd=3 -v cl=4 -f tools/mser.awk $OUT/coeffs.dat)
+
+# columns of coeffs.dat (coeffHistory): Time Cm Cd Cl Cl(f) Cl(r)
+# means, min, max and standard deviations over the stable part (rows from FROM on)
+read CD CDMIN CDMAX CL CLMIN CLMAX CLF CLR CM CDSD CLSD <<< $(awk -v f=$FROM '$1 >= f {
+        n++; cd += $3; cl += $4; cm += $2; clf += $5; clr += $6
+        cd2 += $3 * $3; cl2 += $4 * $4
+        if (n == 1 || $3 < cdmin) cdmin = $3; if (n == 1 || $3 > cdmax) cdmax = $3
+        if (n == 1 || $4 < clmin) clmin = $4; if (n == 1 || $4 > clmax) clmax = $4 }
+    END {
+          vd = cd2/n - (cd/n)^2; vl = cl2/n - (cl/n)^2
+          printf "%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.2e %.2e",
+          cd/n, cdmin, cdmax, cl/n, clmin, clmax, clf/n, clr/n, cm/n,
+          sqrt(vd > 0 ? vd : 0), sqrt(vl > 0 ? vl : 0) }' $OUT/coeffs.dat)
+[ -n "$CdReference" ] &&
+        CDERR=$(fmt 1 "100 * ($CD - $CdReference) / $CdReference")
+# forces (system/forces) over the same stable window: drag along x, lift
+# along z, pressure part and viscous (friction) part, simulated model [N]
+FORCES=""
+if [ -s $OUT/forces.dat ]; then
+    read FDP FDV FLP FLV <<< $(awk -v f=$FROM '$1 >= f {
+            n++; dp += $2; dv += $5; lp += $4; lv += $7 }
+        END { if (n) printf "%.4f %.4f %.4f %.4f", dp/n, dv/n, lp/n, lv/n }' $OUT/forces.dat)
+    if [ -n "$FDP" ]; then
+        FORCES=1
+        Q=$(calc "0.5 * $rhoInf * $uInf * $uInf")            # dynamic pressure
+        FD=$(calc "$FDP + $FDV"); FL=$(calc "$FLP + $FLV")
+        f2 () { fmt 3 "$1"; }                                   # force [N], 3 decimals
+        pc () { fmt 1 "($2 != 0) ? 100 * $1 / $2 : 0"; }        # $1 as % of $2
+        FDPf=$(f2 $FDP); FDVf=$(f2 $FDV); FDf=$(f2 $FD)
+        FLPf=$(f2 $FLP); FLVf=$(f2 $FLV); FLf=$(f2 $FL)
+        FD2=$(f2 $(calc "$FACT * $FD")); FL2=$(f2 $(calc "$FACT * $FL"))
+        PDP=$(pc $FDP $FD); PDV=$(pc $FDV $FD)
+        FF2=$(f2 $(calc "$FACT * $FDV"))
+        CFW=$(fmt 5 "$FDV / ($Q * $wettedArea)")              # mean Cf = friction drag / (q A_wet)
+        EFF=$(fmt 3 "($FD != 0) ? -($FL) / ($FD) : 0")            # efficiency E = L/D (downforce / drag)
+        FDW=$(calc "$FACT * $FD"); FLW=$(calc "-1 * $FACT * $FL")   # whole wing: drag, downforce
+    fi
+fi
+# why the run stopped: residualControl, an error (FATAL ERROR, floating
+# point exception, MPI abort), endTime, or still running / interrupted
+ENDT=$(getEntry endTime system/controlDict)
+LAST=$(grep "^Time = " $LOGRUN 2> /dev/null | tail -1 | sed 's/^Time = //; s/s$//')
+# with Allrun -continue the log holds every run one after the other: the
+# convergence message is looked for only in the last one (after the last
+# "Starting time loop"), or an earlier run that met residualControl would
+# be reported for a later one stopped by endTime
+if awk '/^Starting time loop/ { c = 0 } /solution converged/ { c = 1 }
+        END { exit !c }' $LOGRUN 2> /dev/null; then
+    STOP="residual criteria met (\\texttt{residualControl})"; STATUS=converged-residuals
+# an error is looked for only after the last iteration (with Allrun
+# -continue the log also holds the earlier, already resumed, runs)
+elif awk '/^Time = /{ t = "" } { t = t $0 "\n" } END { printf "%s", t }' $LOGRUN 2> /dev/null |
+     grep -qE "FOAM FATAL|Floating point exception \(core|MPI_ABORT|sigFpe::sigHandler"; then
+    STOP="\\textbf{an error} at iteration $LAST (see \\texttt{logs/log.$SOLVER}); results up to the last time written"; STATUS=error
+    echo "warning: the run stopped with an error at iteration $LAST (see $LOGRUN)"
+elif grep -q "stopAt writeNow" logs/log.convergence log.convergence 2> /dev/null; then
+    STOP="mean \$C_D\$ and \$C_L\$ converged: standard errors and drifts within \\texttt{cdTolerance} = \\num{$cdTolerance} of \$C_D\$ (\\texttt{scripts/convergenceMonitor})"; STATUS=converged-Cd
+elif [ -n "$LAST" ] && check "$LAST >= $ENDT"; then
+    STOP="maximum number of iterations (\\texttt{endTime})"; STATUS=endTime
+else
+    STOP="interrupted at iteration $LAST, before \\texttt{endTime} = $ENDT"; STATUS=interrupted
+fi
+# CPU time: with Allrun -continue each run restarts the clock, so the last
+# ExecutionTime of every run is added up
+CPU=$(awk '/^Starting time loop/ { s += t; t = 0 } /^ExecutionTime/ { t = $3 }
+           END { printf "%g", s + t }' $LOGRUN 2> /dev/null)
+NPROC=$(ls -d processor* 2> /dev/null | wc -l)
+[ "$NPROC" -gt 0 ] || NPROC=1
+RE=$(calc "$uInf * $bodyLength / $nu")
+# y+ on each wall at the last time: min, max, mean of the function yPlus
+# (postProcessing/yPlus/<start>/yPlus.dat: Time patch min max average);
+# the y+ bands of the Ahmed-body case (scripts/yPlusCheck) have been removed
+YPROWS=$(ls postProcessing/yPlus/*/yPlus.dat 2> /dev/null | sort -t/ -k3 -g | tail -1 |
+    xargs -r awk '!/^#/ && NF >= 5 { t = $1; r[$2] = $3 " " $4 " " $5 }
+        END { for (p in r) { split(r[p], v, " ")
+              printf "\\texttt{%s} & \\num{%.3g} & \\num{%.3g} & \\num{%.3g} \\\\\n", p, v[1], v[2], v[3] } }' |
+    sed 's/_/\\_/g' | sort)
+
+#------------------------------------------------- images and charts
+# report data: planes, iso-surfaces, streamlines, cut by OpenFOAM in
+# parallel at the last time (system/reportFunctions); again only if the
+# report geometry changed (scripts/postSetup, e.g. another nPlanes)
+TIME=$(ls postProcessing/wingSurfaces 2> /dev/null | sort -g | tail -1)
+# a case meshed before the report geometry existed: create it now
+[ "$MODE" = results ] && [ ! -f system/reportGeometry ] && scripts/postSetup > /dev/null
+if [ "$MODE" = results ] && [ -n "$TIME" ] && command -v $SOLVER > /dev/null &&
+   { [ ! -d postProcessing/planes/$TIME ] ||
+     [ system/reportGeometry -nt postProcessing/planes/$TIME ]; }; then
+    EXTRACT="$SOLVER -postProcess -dict system/reportFunctions -latestTime"
+    if [ -d processor0 ]; then
+        EXTRACT="${MPIRUN:-mpirun} -np $NPROC $EXTRACT -parallel"
+    fi
+    echo "report data (OpenFOAM, $NPROC processor(s)): $EXTRACT"
+    START=$(date +%s)
+    $EXTRACT > $OUT/log.reportFunctions 2>&1 ||
+        echo "report data failed: see $OUT/log.reportFunctions"
+    echo "   done in $(( $(date +%s) - START )) s"
+fi
+
+# images: sections, wing surface, streamlines (tools/report/images.py)
+if [ -n "$PVBATCH" ] && [ -n "$TIME" ]; then
+    START=$(date +%s)
+    $PVBATCH tools/report/images.py $TIME $FIG \
+        > $OUT/log.images 2>&1 || echo "images failed: see $OUT/log.images"
+    echo "images (ParaView): done in $(( $(date +%s) - START )) s"
+else
+    echo "pvbatch or postProcessing/wingSurfaces missing: no images"
+fi
+
+# CSV data for the charts
+{   echo "iteration,Cm,Cd,Cl,ClF,ClR,CdMean,ClMean${CdReference:+,CdReference}"
+    awk -v cd=$CD -v cl=$CL -v r="$CdReference" '{
+        printf "%s,%s,%s,%s,%s,%s,%s,%s%s\n", $1, $2, $3, $4, $5, $6, cd, cl,
+               (r == "" ? "" : "," r) }' $OUT/coeffs.dat
+} > $OUT/coeffs.csv
+# only the equations that were solved (a column of N/A: field not solved,
+# e.g. epsilon with kOmegaSST); first rows of a field may be N/A too
+{   awk 'NR == FNR { for (i = 2; i <= NF; i++) if ($i != "N/A") ok[i] = 1; next }
+         FNR == 1 { split("iteration '"$(echo $RESCOLS | sed 's/_initial//g')"'", h, " ")
+                    printf "%s", h[1]; for (i = 2; i <= NF; i++) if (ok[i]) printf ",%s", h[i]; print "" }
+         { bad = 0; for (i = 2; i <= NF; i++) if (ok[i] && $i == "N/A") bad = 1
+           if (bad) next
+           printf "%s", $1; for (i = 2; i <= NF; i++) if (ok[i]) printf ",%s", $i; print "" }' \
+        $OUT/residuals.dat $OUT/residuals.dat
+} > $OUT/residuals.csv
+# Cp on the wing section y = cutY (written by images.py): -Cp against x/c,
+# x from the leading point of the reference region (mainplane), c its
+# length (refLength); suction and pressure sides as one set of points
+if [ -f $FIG/cp_centreline.csv ]; then
+    X0=$(calc "$xCofR - 0.25 * $refLength")
+    awk -F, -v x0=$X0 -v c=$refLength '
+        NR == 1 { for (i = 1; i <= NF; i++) { gsub(/"/, "", $i); col[$i] = i }
+                  print "xc,minusCp"; next }
+        { printf "%g,%g\n", ($col["Points:0"] - x0) / c, -$col["Cp"] }' \
+        $FIG/cp_centreline.csv > $OUT/cp_section.csv
+fi
+
+Q=$(calc "0.5 * $uInf * $uInf")                  # dynamic pressure (kinematic)
+# mean pressure on the inlet (system/inletPressure), as Cp
+if [ -n "$(dat inletPressure surfaceFieldValue.dat)" ]; then   # Time areaAverage(p)
+    { echo "iteration,CpInlet"
+      dat inletPressure surfaceFieldValue.dat |
+          awk -v q=$Q '{ printf "%s,%g\n", $1, $2 / q }'; } > $OUT/inlet.csv
+    CPIN=$(tail -1 $OUT/inlet.csv | cut -d, -f2)
+fi
+# profiles (system/profiles), last time written: x/H from the trailing
+# point, z/H from the bottom of the wing, velocity / Uinf, Cp, Cp0; the ESI
+# files (<line>_<fields>.xy) are merged by tools/readSets.py, columns by name
+PROF=$(ls -d postProcessing/profiles/* 2> /dev/null | sort -t/ -k3 -g | tail -1)
+ZB=$(calc "$bodyTop - $bodyHeight")
+# line <set>: the table of tools/readSets.py with the columns named in its
+# header as awk variables c[<name>]
+line () { python3 tools/readSets.py $PROF $1 2> /dev/null; }
+if [ -n "$PROF" ]; then
+    for i in 1 2 3 4 5; do
+        line wake$i > /dev/null || continue
+        { echo "zH,uU,wU,Cp0"
+          line wake$i | awk -v zb=$ZB -v H=$bodyHeight -v u=$uInf '
+              /^#/ { for (i = 2; i <= NF; i++) c[$i] = i - 1; next }
+              { printf "%g,%g,%g,%g\n", ($1 - zb) / H, $c["Ux"] / u, $c["Uz"] / u, $c["Cp0"] }'
+        } > $OUT/profile$i.csv
+    done
+    line centreline > /dev/null && { echo "xH,uU,Cp"
+        line centreline | awk -v x1=$stlXmax -v H=$bodyHeight -v u=$uInf -v q=$Q '
+            /^#/ { for (i = 2; i <= NF; i++) c[$i] = i - 1; next }
+            { printf "%g,%g,%g\n", ($1 - x1) / H, $c["Ux"] / u, $c["p"] / q }'
+        } > $OUT/centreline.csv
+fi
+
+# forces of each part of the wing (forces_<region>, system/regionForces):
+# drag and downforce over the same stable window as the coefficients [N]
+REGROWS=""
+for r in $(echo "$wallPatches" | tr -d '()'); do
+    forceHistory forces_$r > $OUT/forces_$r.dat
+    [ -s $OUT/forces_$r.dat ] || continue
+    REGROWS="$REGROWS$(awk -v f=$FROM -v k=$FACT -v n="$r" '$1 >= f {
+            m++; d += $2 + $5; l += $4 + $7 }
+        END { if (m) { gsub(/_/, "\\_", n)
+              printf "\\texttt{%s} & \\num{%.2f} & \\num{%.2f} \\\\\n", n, k * d / m, -k * l / m } }' $OUT/forces_$r.dat)
+"
+done
+
+# charts (tools/report/plots.py)
+if [ -n "$PVBATCH" ]; then
+    $PVBATCH tools/report/plots.py $OUT $FIG \
+        $FROM $CD $CL $CdReference > $OUT/log.plots 2>&1 ||
+        echo "charts failed: see $OUT/log.plots"
+fi
+
+{ preamble "simulation results"
+  cat <<EOF
+
+\\section{Flow conditions}
+\\begin{table}[H]\\centering
+\\begin{tabular}{ll}\\toprule
+Free-stream velocity \$U_\\infty\$ & \\SI{$uInf}{m/s} \\\\
+Reynolds number \$U_\\infty L/\\nu\$ & \\num{$RE} \\\\
+Cells (see the mesh report) & \\num{${CELLS:-0}} \\\\
+Flap angle & ${ANGLE:-?}\\,\\si{\\degree} \\\\
+Layers on \\texttt{$REF1TEX}: mean / design & ${LAYAVG:-?} / $nLayers \\\\
+Processors & $NPROC \\\\
+Iterations & $NIT, stopped by: $STOP \\\\
+CPU time & \\SI{${CPU:-0}}{s} \\\\\\bottomrule
+\\end{tabular}
+\\end{table}
+
+\\section{Main results}
+\\begin{table}[H]\\centering
+\\begin{tabular}{lccccc}\\toprule
+ & mean & std.\\ error of the mean & standard deviation \$\\sigma\$ & min & max \\\\\\midrule
+\$C_D\$ & \\num{$CD} & \\num{$CDSE} & \\num{$CDSD} & \\num{$CDMIN} & \\num{$CDMAX} \\\\
+\$C_L\$ & \\num{$CL} & \\num{$CLSE} & \\num{$CLSD} & \\num{$CLMIN} & \\num{$CLMAX} \\\\
+\$C_{L,\\mathrm{front}}\$, \$C_{L,\\mathrm{rear}}\$ & \\num{$CLF}, \\num{$CLR} & & & & \\\\
+\$C_M\$ & \\num{$CM} & & & & \\\\\\bottomrule
+\\end{tabular}
+\\caption{Aerodynamic coefficients over the stable part of the history, from iteration $FROM to $NIT ($WIN iterations; start found with the MSER rule, see the section Convergence); standard error of the mean with 10 batch means (the uncertainty of the mean due to the finite number of iterations); variance = \$\\sigma^2\$
+(\$A_\\mathrm{ref}\$ = ${refArea:-frontal} area, \\SI{$refAreaValue}{m^2}; \$l_\\mathrm{ref}\$ = chord of the wing elements, \\SI{$refLength}{m}; lift along \$+z\$: downforce gives \$C_L<0\$).}
+\\end{table}
+$([ -n "$CdReference" ] && echo "\noindent Experimental \$C_D\$: \num{$CdReference}; difference \SI{$CDERR}{\percent}.")
+$([ -n "$FORCES" ] && cat <<FRC
+
+\\section{Forces: drag, downforce and efficiency}
+\\begin{table}[H]\\centering
+\\begin{tabular}{lccc}\\toprule
+ & simulated [N] & whole wing [N] & coefficient \\\\\\midrule
+Drag \$D\$ & \\num{$FDf} & \\num{$FD2} & \$C_D\$ = \\num{$CD} \\\\
+Downforce \$L = -F_z\$ & \\num{$(f2 $(calc "-1 * $FL"))} & \\num{$(f2 $(calc "-1 * $FACT * $FL"))} & \$C_L\$ = \\num{$CL} \\\\
+Friction \$F_f\$ & \\num{$FDVf} & \\num{$FF2} & \$C_f\$ = \\num{$CFW} \\\\\\midrule
+Efficiency \$E = L/D\$ & \\multicolumn{3}{c}{\\num{$EFF}} \\\\\\bottomrule
+\\end{tabular}
+\\caption{Forces on the walls (\\texttt{forces} function), mean over the same iterations as the coefficients (from $FROM to $NIT).
+Friction: the wall shear stress integrated over the walls, along the flow; it is \\SI{$PDV}{\\percent} of the drag, the rest (\\SI{$PDP}{\\percent}, \\num{$FDPf} N) is pressure drag.
+\$C_f = F_f / (0.5 \\rho_\\infty U_\\infty^2 S_\\mathrm{wet})\$, mean skin-friction coefficient over the wetted area (\$c_f\$ = \\num{$cf} assumed for the near-wall mesh).
+$([ "$halfModel" = yes ] && echo "The simulation covers half of the wing (symmetry plane): whole wing = twice the simulated half." || echo "The simulation covers the whole wing.")
+\$\\rho_\\infty\$ = \\SI{$rhoInf}{kg/m^3}, \$U_\\infty\$ = \\SI{$uInf}{m/s}.}
+\\end{table}
+FRC
+)
+$([ -n "$REGROWS" ] && cat <<REG
+\\begin{table}[H]\\centering
+\\begin{tabular}{lcc}\\toprule
+Region & drag [N] & downforce [N] \\\\\\midrule
+$REGROWS\\bottomrule
+\\end{tabular}
+\\caption{Forces of each part of the wing (one \\texttt{forces} function per region of the STL, \\texttt{system/regionForces}), pressure and viscous, mean over the same iterations; whole wing.}
+\\end{table}
+REG
+)
+
+\\section{Convergence}\\label{sec:convergence}
+The averages use only the stable part of the history of \$C_D\$ and \$C_L\$. Its start is found with the MSER rule (Marginal Standard Error Rule): the first iteration \$d\$ that minimises \$\\sum_{i \\ge d} (y_i - \\bar y_d)^2 / (n - d)^2\$, that is the uncertainty of the mean of the iterations that are kept. For this run \$d = $FROM\$ ($FROMCD for \$C_D\$, $FROMCL for \$C_L\$; the later is used).$([ "$UNSTABLE" = 1 ] && echo " \\textbf{Warning:} the start falls at the end of the search range (half of the iterations): the history is still in its transient, more iterations are needed.")
+
+$(fig residuals "Initial residuals of each equation (\\texttt{solverInfo}).")
+$(fig inlet "Mean pressure coefficient on the inlet patch (\\texttt{inletPressure}), every iteration$([ -n "$CPIN" ] && echo "; last value \\num{$CPIN}"): it must settle to a constant, the blockage of the wing felt upstream.")
+$(fig coeffs "History of \$C_D\$ and \$C_L\$ from iteration $(calc "int($NIT / 10)"); the first tenth, the start from the initial field, is left out. Dashed: means over the stable part (from iteration $FROM).")
+
+\\section{Wall: \$y^+\$}
+$([ -n "$YPROWS" ] && cat <<YPT
+\\begin{table}[H]\\centering
+\\begin{tabular}{lccc}\\toprule
+Patch & min & max & mean \\\\\\midrule
+$YPROWS
+\\bottomrule
+\\end{tabular}
+\\caption{\$y^+\$ of the first cell centre on each wall at the last iteration (function \\texttt{yPlus}); design value $yPlus at \$U_\\infty\$ = \\SI{$uInf}{m/s}.}
+\\end{table}
+YPT
+)
+$(fig yplus_body "\$y^+\$ on the wing (log scale).")
+$(fig yplus_1_3 "\$y^+\$ from 1 to 3 (dark grey: below 1, light grey: above 3).")
+$(fig yplus_45_55 "\$y^+\$ from 4.5 to 5.5, the edge of the viscous sublayer (dark grey: below, light grey: above).")
+
+\\section{Wall: shear stress}
+$(fig wss_side "Skin-friction coefficient \$C_f = |\\tau_w| / (0.5 \\rho U_\\infty^2)\$ on the wing, side view (\\texttt{wallShearStress}); white: \$C_f\$ above twice the design value \$c_f\$ = \\num{$cf}.")
+$(fig wss_top "\$C_f\$ on the wing, top view: low values where the flow separates (flap trailing edge, DRS pod, endplate edges).")
+
+\\section{Pressure on the wing}
+$(fig cp_side "\$C_p\$ on the wing, side view.")
+$(fig cp_top "\$C_p\$ on the wing, top view (pressure side of the inverted wing).")
+$(fig cp_bottom "\$C_p\$ on the wing, bottom view (suction side).")
+$(fig cp_rear "\$C_p\$ on the wing seen from behind and below.")
+$(fig cp_centreline "\$-C_p\$ on the wing section \$y\$ = \\SI{$cutY}{m} against \$x/c\$ (\$c\$ = \\SI{$refLength}{m}, from the leading edge of the main plane): suction upwards, as usual in aerodynamics; mainplane and flap.")
+
+\\section{Flow field}
+$(fig u_midplane "Velocity magnitude on the wing section \$y\$ = \\SI{$cutY}{m}.")
+$(fig cp_midplane "\$C_p\$ on the same section.")
+$(fig cp0_wake "Total pressure \$C_{p0}\$ in the wake, \$H/2\$ behind the trailing point, seen from behind: losses of the wake and of the endplate tip vortices.")
+$(fig streamlines "Streamlines through a grid of points just in front of the wing: stagnation, flow round the elements and into the wake.")
+$(fig streamlines_top "The same streamlines seen from above.")
+$(fig streamlines_side "Side view, with a second grid of seeds in the wake: upwash of the wake and tip vortices.")
+$(fig streamlines_bottom "The same streamlines seen from below.")
+
+\\section{Vortical structures}
+$(fig q_iso "Iso-surface of the Q-criterion, \$Q = Q^* (U_\\infty/H)^2\$ with \$Q^*\$ = \\num{$QStar} (\\texttt{constant/caseSettings}), coloured by \$|U|/U_\\infty\$: tip vortices of the endplates, vortices of the DRS pod and of the flap.")
+$(fig cp0_iso "Iso-surface \$C_{p,\\mathrm{tot}} = 0\$, coloured by \$|U|/U_\\infty\$: the region where the flow has lost all its free-stream total pressure (separated flow and wake).")
+
+\\section{Wake profiles}
+$(fig profiles_u "Profiles of the stream-wise velocity \$u/U_\\infty\$ on the section \$y\$ = \\SI{$cutY}{m} behind the wing, at \$x/H\$ = 0.25, 0.5, 1, 1.5, 2 (\$x\$ from the trailing point, \$z\$ from the bottom of the wing elements).")
+$(fig profiles_w "Profiles of the vertical velocity \$w/U_\\infty\$ at the same positions: upwash of the wake of a downforce wing.")
+$(fig centreline "Wake line at mid-height of the wing: \$u/U_\\infty\$ and \$C_p\$ from the trailing point (\$x/H\$ = 0) to the end of the wake box.")
+
+$([ -f $FIG/planes.tex ] && echo "\\clearpage" && echo "\\section{Flow-field planes}" && echo "\\num{${nPlanes:-16}} planes at constant distance along each principal direction (extracted by OpenFOAM in parallel, \\texttt{system/reportFunctions}), across the near box (wing and near wake): velocity magnitude, turbulent kinetic energy \$k\$, pressure and total-pressure coefficient. \$x\$ from the leading point (\$x/L\$), \$y\$ from the centre plane (\$y/W\$), \$z\$ from the bottom of the domain (\$z/H\$)." && echo "\\input{fig/planes.tex}")
+\\end{document}
+EOF
+} > $OUT/results.tex
+pdf
+echo "Cd = $CD (min $CDMIN, max $CDMAX), Cl = $CL, over the last $WIN iterations; D = ${FDW:-?} N, L = ${FLW:-?} N, E = ${EFF:-?}"
+
+#------------------------------------------------- metadata and summary
+# every run self-describing (course slides "CFD simulation workflow"):
+# source, parameters, environment, resources and outcome in
+# report/results/metadata.yaml; the key metrics in one CSV line,
+# report/results/summary.csv, the same columns for every run (grid study)
+GIT=$(git rev-parse --short HEAD 2> /dev/null || echo none)
+# uncommitted changes in the working copy
+DIRTY=$(git status --porcelain 2> /dev/null | grep -q . && echo yes || echo no)
+[ "$GIT" = none ] && DIRTY=-
+# hash of the inputs (the recipe, not the results): independent of git
+INPUTS=$(ls -d system constant 0.orig scripts tools Allrun Allrun.pre Allclean 2> /dev/null)
+# hash of all the inputs
+HASH=$(find $INPUTS -type f ! -path 'constant/polyMesh/*' ! -name meshVariables \
+           ! -name reportGeometry ! -name rearRegions ! -name stlRegions ! -name regionForces \
+           ! -path 'tools/bin/*' ! -path 'tools/stlInfo/build/*' ! -name '*.eMesh' ! -name '*.obj' \
+           2> /dev/null | sort | xargs -r cat | sha256sum | cut -c1-16)
+# OpenFOAM build: "Build : ..." line of the solver log
+OFBUILD=$(grep -m1 "^Build" $LOGRUN 2> /dev/null | sed 's/^Build *: *//')
+MPIV=$(mpirun --version 2> /dev/null | head -1)
+GCCV=$(gcc --version 2> /dev/null | head -1)
+RESLAST=$(tail -1 $OUT/residuals.csv 2> /dev/null | tr , ' ')
+RESHEAD=$(head -1 $OUT/residuals.csv 2> /dev/null | tr , ' ')
+# final residual of p / U: value under the column with that name
+RESP=$(echo "$RESHEAD" "|" "$RESLAST" | awk -F'|' '{ n = split($1, h, " "); split($2, v, " ")
+          for (i = 2; i <= n; i++) if (h[i] == "p") print v[i] }')
+RESU=$(echo "$RESHEAD" "|" "$RESLAST" | awk -F'|' '{ n = split($1, h, " "); split($2, v, " ")
+          for (i = 2; i <= n; i++) if (h[i] == "Ux" || h[i] == "U") { print v[i]; exit } }')
+cat > $OUT/metadata.yaml <<EOY
+# written by scripts/report results: source, parameters, environment,
+# resources and outcome of this run
+case: ${caseTitle:-case}
+date: $(date '+%Y-%m-%d %H:%M:%S')
+source:
+  git: $GIT
+  uncommittedChanges: $DIRTY
+  inputsHash: $HASH       # sha256 of system/, constant/ (no mesh), 0.orig/, scripts/, tools/, Allrun*
+parameters:
+  flapAngle: ${ANGLE:-unknown}
+  meshSize: ${meshSize:-}
+  yPlus: $yPlus
+  nWallLayers: $nWallLayers
+  expansionRatio: $expansionRatio
+  finalLayerThickness: ${finalLayerThickness:-}
+  uInf: $uInf
+  nu: $nu
+  turbulenceModel: ${turbulenceModel:-}
+  cdTolerance: ${cdTolerance:-none}
+environment:
+  openfoam: "${OFBUILD:-unknown}"
+  compiler: "${GCCV:-unknown}"
+  mpi: "${MPIV:-unknown}"
+  host: $(hostname)
+resources:
+  cells: ${CELLS:-0}
+  subdomains: $NPROC
+  cpuTime_s: ${CPU:-0}
+outcome:
+  status: ${STATUS:-unknown}
+  iterations: $NIT
+  stableFrom: $FROM
+  transientNotOver: $([ "$UNSTABLE" = 1 ] && echo yes || echo no)
+  Cd: $CD
+  CdStdError: $CDSE
+  Cl: $CL
+  ClStdError: $CLSE
+  drag_N: ${FDW:-}          # whole wing
+  downforce_N: ${FLW:-}     # whole wing, -F_z
+  efficiency: ${EFF:-}      # downforce / drag
+  finalResidualP: ${RESP:-}
+  finalResidualU: ${RESU:-}
+EOY
+SUMH="case,flapAngle,uInf,mesh,cells,subdomains,cpuTime_s,iterations,status,stableFrom,Cd,CdStdError,Cl,ClStdError,drag_N,downforce_N,efficiency,finalResidualP,finalResidualU,git,inputsHash"
+SUMV="${caseTitle:-case},${ANGLE:-},$uInf,${meshSize:-},${CELLS:-0},$NPROC,${CPU:-0},$NIT,${STATUS:-unknown},$FROM,$CD,$CDSE,$CL,$CLSE,${FDW:-},${FLW:-},${EFF:-},${RESP:-},${RESU:-},$GIT,$HASH"
+printf "%s\n%s\n" "$SUMH" "$SUMV" > $OUT/summary.csv
+echo "summary: flap ${ANGLE:-?} deg, ${uInf} m/s, mesh ${meshSize:-?}, ${CELLS:-?} cells, $NPROC subdomains, ${CPU:-?} s, $NIT iterations ($STATUS), Cd $CD +- $CDSE, Cl $CL, residuals p ${RESP:-?} U ${RESU:-?}"
