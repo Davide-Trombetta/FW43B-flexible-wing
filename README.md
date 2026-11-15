@@ -2,7 +2,7 @@
 
 Course project, *High Performance Simulation Lab for Mechanical Engineering* (Politecnico di Milano).
 Williams FW43B(AR) 2021 rear wing: CFD with OpenFOAM, structural analysis of the composite shell with Ansys
-Mechanical APDL, one-way fluid–structure coupling, and a flap-angle study on three circuits (rigid vs flexible wing).
+Mechanical APDL, one-way fluid–structure coupling, and a flap-angle study on one circuit (rigid vs flexible wing).
 
 
 ## Repository layout
@@ -10,10 +10,10 @@ Mechanical APDL, one-way fluid–structure coupling, and a flap-angle study on t
 | Folder | Content |
 |---|---|
 | `geometry/` | CFD surface of the isolated rear wing for five flap angles (−4°, −2°, 0°, +2°, +4°) |
-| `cfd/` | The full CFD case with OpenFOAM goes here |
+| `cfd/` | OpenFOAM cases: `rearWing` (steady RANS) and `rearWingURANS` (unsteady RANS, production runs) |
 | `structure/flap_<angle>deg/` | ready-to-run Ansys Mechanical APDL model for each flap angle |
 | `fsi/` | load transfer CFD → structure and displacement transfer structure → CFD mesh |
-| `results/` | summary results only (CSV tables, plots) |
+| `results/` | results copied from the cluster, one folder per speed and angle, and the summary tables and plots |
 | `docs/` | figures, slides, report |
 
 All commands are run from the repository root.
@@ -30,98 +30,135 @@ a flexible wing leads to a different choice of flap angle than a rigid one.
   (see `structure/README.md`).
 - **Five flap angles.** −4°, −2°, 0°, +2°, +4° (rigid rotation of the flap about its leading edge; positive = steeper
   flap, more downforce and more drag).
-- **Three circuits.** Low, medium and high downforce, e.g. Monza, Barcelona and the Hungaroring. Two reference
-  speeds per circuit from the 2021 qualifying telemetry: a corner speed and a straight-line speed
-  (DRS closed).
+- **One circuit, two speeds.** Two reference speeds from the 2021 qualifying telemetry: a corner speed
+  (where downforce matters) and a straight-line speed (where drag matters, DRS closed).
 - **Rigid vs flexible.** For every angle and speed the wing is analysed rigid and deformed under its own
   aerodynamic loads (one-way fluid–structure coupling).
 
-### Simulation chain (one angle, one speed)
+### Simulation pipeline (one angle, one speed)
 
-1. **Rigid CFD** – steady RANS (OpenFOAM `simpleFoam`, k-ω SST) on the isolated wing: downforce, drag and the
-   wall-pressure field.
-2. **Load transfer** – the pressure is mapped onto the structural shell mesh with force conservation
-   (`fsi/map_pressure.py`, difference < 2 %).
+The same chain is run for each of the 2 × 5 = 10 combinations of speed and flap angle:
+
+1. **Rigid CFD** – unsteady RANS (OpenFOAM `pimpleFoam`, k-ω SST) on the isolated wing. The forces and the
+   wall pressure are time averages over the developed flow (`fieldAverage`: `UMean`, `pMean`), after the
+   start-up transient; the same run gives the shedding frequency of the wake.
+2. **Load transfer** – the mean wall pressure `pMean` is mapped onto the structural shell mesh with force
+   conservation (`fsi/map_pressure.py`, difference < 2 %).
 3. **FEM** – linear static analysis in Ansys Mechanical APDL: displacements of the wing.
-4. **Deformed CFD** – the CFD mesh is morphed with the structural displacements (`fsi/write_point_displacement.py`)
-   and the flow is solved again: downforce and drag of the flexible wing.
+4. **Mesh morphing** – the structural displacements are imposed on the wing walls of the rigid CFD mesh
+   (`fsi/write_point_displacement.py`, `pointDisplacement`) and the volume mesh is moved once with
+   `moveDynamicMesh` (see below).
+5. **Deformed CFD** – the flow is solved again on the morphed, fixed mesh: downforce and drag of the flexible
+   wing.
+
+The 10 chains are independent of each other: on the cluster each one runs as its own sequence of jobs
+(rigid CFD → FEM → mesh morphing → deformed CFD), and all of them run in parallel.
+
+| | Runs |
+|---|---|
+| Rigid CFD | 10 (5 angles × 2 speeds) |
+| FEM | 10 |
+| Deformed CFD | 10 |
+| **Total** | **20 CFD + 10 FEM** |
+
+The rigid wing is run at both speeds even though its force coefficients hardly depend on speed. This keeps
+every chain identical and self-contained, the FEM load is the actual load at that speed (no scaling of loads or
+displacements with V²), and rigid and flexible wing are compared at the same speed and Reynolds number, so the
+difference is due to the deformation only. The two rigid runs of each angle also check that the coefficients
+are independent of speed.
+
+### Mesh morphing
+
+The coupling is one-way, so the CFD mesh is deformed only once, before the deformed CFD, and that run uses a
+fixed mesh (no dynamic mesh during the flow solution, no extra cost per time step). The OpenFOAM utility
+`moveDynamicMesh` moves the mesh without solving the flow:
+
+- motion solver `displacementLaplacian`: a Laplace equation ∇·(γ ∇u) = 0 for the mesh displacement, with the
+  FEM displacements on the wing walls and zero displacement on the outer boundaries;
+- diffusivity γ `quadratic inverseDistance` from the wing walls: the boundary-layer cells move almost rigidly
+  with the wall and keep their thickness and aspect ratio, the deformation is absorbed by the larger cells away
+  from the wing. With a uniform diffusivity the thin prism layers (first layer about 1 mm, wing displacements of
+  a few millimetres) would be compressed or stretched;
+- one motion step (a few steps for large displacements), then `checkMesh` on the morphed mesh: no inverted
+  cells, non-orthogonality and skewness not worse than in the rigid mesh.
+
+The deformed CFD then starts from the same initial field as the rigid one (`potentialFoam`), so that the two runs
+differ only in the geometry.
+
 
 ### Flap-angle selection
 
-For each angle and case (rigid / flexible) we compute:
+The results are copied from the cluster to the PC, one folder per speed and angle:
+
+```
+results/
+  U<corner speed>/flap<angle>/rigid/        report, summary.csv, history of the coefficients
+  U<corner speed>/flap<angle>/deformed/
+  U<straight speed>/flap<angle>/rigid/
+  U<straight speed>/flap<angle>/deformed/
+```
+
+A script in the repository root reads the 20 `summary.csv` files and computes, for each angle and case
+(rigid / flexible):
 
 - downforce **L** at the corner speed,
 - drag **D** at the straight-line speed,
-- aerodynamic efficiency **E = L / D**.
+- efficiency **E = L / D**,
+
+the best flap angle of the rigid and of the flexible wing, and the differences flexible − rigid in L, D and E
+(tables and plots in `results/`).
 
 L and D both increase with the flap angle, so "maximum downforce" or "minimum drag" alone would always select the
 steepest or the flattest flap. The efficiency, instead, has a maximum at an intermediate angle and is the reference
-for the choice:
-
-| Circuit type | Priority | Chosen angle |
-|---|---|---|
-| Low downforce (e.g. Monza) | low drag on long straights | below the efficiency maximum |
-| Medium downforce (e.g. Barcelona) | balance | close to the efficiency maximum |
-| High downforce (e.g. Hungaroring) | grip in slow corners | above the efficiency maximum |
-
-The flexible wing bends more on the straights (load ∝ V²), which lowers its drag there: its efficiency curve, and so
-the best angle for each circuit, can shift with respect to the rigid wing. The main results are this shift and
-the gain or loss in downforce and drag for each circuit.
-
-### Reducing the number of simulations
-
-With 5 angles and 3 circuits there are 6 speeds per angle (3 circuits × corner / straight). Running every case
-would need 60 CFD and 30 FEM runs. Two physical properties reduce this:
-
-- **Rigid CFD: one per angle.** The rigid geometry does not change with speed and the force coefficients are
-  practically independent of it (incompressible flow, Mach < 0.3), so F = ½ ρ V² S C gives the forces at every
-  speed. This is checked once, running the same angle at two speeds.
-- **FEM: one per angle.** The structural model is linear and the loads scale with V², so the displacements do too:
-  u(V) = u(V_ref) · (V / V_ref)² (`--scale` option of `fsi/write_point_displacement.py`).
-- **Deformed CFD: one per angle and speed.** The deformed shape changes with speed, so these runs are needed.
-
-| | Every case | With scaling |
-|---|---|---|
-| Rigid CFD | 30 | 5 (+1 check) |
-| FEM | 30 | 5 |
-| Deformed CFD | 30 | 30 |
-| **Total** | **60 CFD + 30 FEM** | **36 CFD + 5 FEM** |
+for the choice. The flexible wing bends more on the straight (load ∝ V²), which lowers its drag there: its
+efficiency curve, and so the best flap angle, can shift with respect to the rigid wing. The main results are this
+shift and the gain or loss in downforce and drag.
 
 ### Numerical and HPC studies
 
-- **Mesh independence** at 0°: three CFD meshes and three structural meshes (coarse / medium / fine). The chosen meshes are then used for all angles.
+- **Mesh independence** at 0°: three CFD meshes and three structural meshes (coarse / medium / fine). The chosen
+  meshes are then used for all angles.
+- **Time step and averaging window** of the URANS runs: Courant number, number of time steps per shedding period,
+  and the end of the start-up transient (MSER check) before the averaging window.
 - **Scaling** of the CFD on the cluster: strong scaling (fixed mesh, increasing processes) and weak scaling
   (fixed cells per process) to choose the number of processes for the production runs.
 
 ### Assumptions and limits
 
 - Isolated rear wing (no car upstream), DRS closed.
+- One circuit: the results are its corner and straight-line speeds; other circuits would need their own speeds.
 - Laminates and material data are assumed, not team data; the shell model is the outer skin only.
-- One-way coupling: the deformed-wing loads are not fed back to the structure.
+- One-way coupling: the deformed-wing loads are not fed back to the structure; the structure is loaded with the
+  time-averaged pressure (static analysis, no dynamic response to the wake shedding).
 
-## Workflow (one flap angle)
+## Workflow (one flap angle, one speed)
 
-1. **CFD, rigid wing** – OpenFOAM `simpleFoam`, k-ω SST, on `geometry/FW43B_rearWing_flap_<angle>deg.stl`;
-   the `wingSurfaces` function object writes the wall pressure (VTK).
-2. **Loads** – `fsi/map_pressure.py` maps the pressure onto the shell mesh of the same angle:
+1. **CFD, rigid wing** – OpenFOAM `pimpleFoam`, k-ω SST, on `geometry/FW43B_rearWing_flap_<angle>deg.stl`, at the
+   chosen speed (`cfd/rearWingURANS`: `./Allrun.pre -angle <angle>`, then `./Allrun -speed <U>`); the
+   `wingSurfaces` function object writes the wall pressure, instantaneous and time-averaged (VTK).
+2. **Loads** – `fsi/map_pressure.py` maps the mean pressure onto the shell mesh of the same angle:
    ```
    python3 fsi/map_pressure.py structure/flap_0deg/ansys/rw_shell_medium_apdl.inp \
-           postProcessing/wingSurfaces/<time>/*.vtk -o structure/flap_0deg/ansys/loads_pressure_apdl.inp
+           postProcessing/wingSurfaces/<time>/*.vtk --field pMean \
+           -o structure/flap_0deg/ansys/loads_pressure_apdl.inp
    ```
    It prints the CFD force and the applied force (difference must be < 2 %).
 3. **Structure** – Mechanical APDL, `structure/flap_<angle>deg/ansys/run_wing_apdl.inp` (see `structure/README.md`).
    Checks: self weight; total reaction of the aerodynamic load step = − applied force.
    The run writes `wing_disp.csv` (nodal displacements).
-4. **Deformed CFD** – the structural displacements (`wing_disp.csv`) deform the existing CFD mesh:
+4. **Mesh morphing** – the structural displacements (`wing_disp.csv`) are written on the wing walls of a copy of
+   the rigid case, and the mesh is moved:
    ```
-   python3 fsi/write_point_displacement.py <deformed case> --table wing_disp.csv [--scale (V/Vref)^2]
+   python3 fsi/write_point_displacement.py <deformed case> --table wing_disp.csv
+   moveDynamicMesh -parallel      # displacementLaplacian, quadratic inverseDistance (constant/dynamicMeshDict)
+   checkMesh -parallel
    ```
-   then `checkMesh` and a second `simpleFoam` run. The structure is linear, so one structural run per angle gives
-   the deformation at any speed through `--scale (V/V_ref)^2`.
+5. **Deformed CFD** – a second `pimpleFoam` run at the same speed, on the morphed mesh.
 
 ## Requirements
 
 - WSL Ubuntu, OpenFOAM v2306, Python 3 with `numpy scipy matplotlib` (`fastf1` for `circuits/circuit_speeds.py`)
+- ParaView (`pvbatch`) and `pdflatex` for the reports of the CFD runs
 - Ansys Mechanical APDL (the Student version is enough: ~128k node limit)
 
 
