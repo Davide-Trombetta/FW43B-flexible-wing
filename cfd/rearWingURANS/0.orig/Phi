@@ -1,0 +1,43 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      Phi;
+}
+
+// velocity potential for potentialFoam (initial field only):
+// the flow leaves only through the outlet
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    #includeEtc "caseDicts/setConstraintTypes"   
+
+    outlet
+    {
+        type            fixedValue;     
+        value           uniform 0;
+    }
+    inlet               
+    {
+        type            zeroGradient;
+    }
+    freestream          
+    {
+        type            zeroGradient;
+    }
+    walls               // every wall: the wing patches and the ground
+    {
+        type            zeroGradient;
+    }
+}

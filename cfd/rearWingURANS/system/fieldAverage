@@ -1,0 +1,56 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      fieldAverage;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+// Time averages of U, p and k (UMean, pMean, kMean) and the variances of U
+// and p (UPrime2Mean, pPrime2Mean), from timeStart on: the initial transient
+// is excluded. pMean on the walls is the load passed to fsi/map_pressure.py
+// (--field pMean); the images of the report show the mean fields.
+
+#include "meshParameters"            // uInf
+
+type            fieldAverage;
+libs            (fieldFunctionObjects);
+
+timeStart       #eval{ 0.1 * 70 / $uInf };   // 0.1 s at 70 m/s
+writeControl    writeTime;      // written with the fields
+
+restartOnRestart false;         // on restart, continue from the saved means
+restartOnOutput  false;
+
+fields
+(
+    U
+    {
+        mean        on;
+        prime2Mean  on;         // Reynolds stresses of the resolved unsteadiness
+        base        time;
+    }
+    p
+    {
+        mean        on;
+        prime2Mean  on;         // pressure fluctuation: rms load on the wing
+        base        time;
+    }
+    k
+    {
+        mean        on;         // kMean: the planes of the report
+        prime2Mean  off;
+        base        time;
+    }
+);
+
+// ************************************************************************* //

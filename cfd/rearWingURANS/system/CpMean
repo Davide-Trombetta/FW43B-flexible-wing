@@ -1,0 +1,22 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Pressure coefficient of the time-averaged pressure (pMean of
+// system/fieldAverage): the Cp of the report images and of the wing section
+// in the URANS case. Same settings as Cp. Before timeStart pMean does not
+// exist yet: the function only warns, at the write times.
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "Cp"
+
+timeStart       #eval{ 0.1 * 70 / $uInf };   // as system/fieldAverage: pMean exists from here on
+
+p               pMean;
+executeControl  writeTime;      // needed only for the fields written
+result          CpMean;
+
+// ************************************************************************* //

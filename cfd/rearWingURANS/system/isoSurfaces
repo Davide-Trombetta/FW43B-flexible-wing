@@ -1,0 +1,48 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Iso-surfaces of the vortical structures (results report), with U for the
+// colour (|U|/Uinf):
+//   Q   = qIso = QStar (uInf/H)^2   (scripts/postSetup, QStar in
+//                                    constant/caseSettings)
+//   Cp0 = 0                         (total-pressure loss of the free stream)
+// Q and Cp0 are computed first (system/reportFunctions)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshVariables"
+
+// URANS: iso-surfaces of the time-averaged flow (QMean, Cp0Mean, computed in
+// system/reportFunctions); the surface names stay Q and Cp0 (images.py)
+
+type            surfaces;
+libs            (sampling);
+writeControl    writeTime;
+surfaceFormat   vtk;
+formatOptions   { vtk { legacy true; format binary; } }
+interpolationScheme cellPoint;
+
+fields          (UMean);        // URANS: time-averaged flow
+
+surfaces
+{
+    Q
+    {
+        type            isoSurface;
+        isoField        QMean;          // Q of UMean (system/QMean)
+        isoValue        $qIso;
+        interpolate     true;
+    }
+    Cp0
+    {
+        type            isoSurface;
+        isoField        Cp0Mean;        // Cp0 of the mean flow (system/Cp0Mean)
+        isoValue        0;
+        interpolate     true;
+    }
+}
+
+// ************************************************************************* //

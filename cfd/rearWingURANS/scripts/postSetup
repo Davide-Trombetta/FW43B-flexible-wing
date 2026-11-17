@@ -1,0 +1,141 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+#  postSetup -- positions of the sections (system/surfaces) and profiles,
+#               and the report geometry (system/reportGeometry)
+#
+#  In:   system/meshParameters, system/meshVariables
+#  Out:  system/meshVariables
+#          cutY              wing section y = const (sectionY)            [m]
+#          cutX              wake section x = const                       [m]
+#          prof1X..prof5X    x of the vertical wake profiles               [m]
+#          zMidBody          z of the wake centre line (wing mid-height)   [m]
+#          profileN, centreN points of the profiles / of the centre line
+#          planeXmin..planeZmax   region of the planes of the report       [m]
+#          qIso              Q of the Q-criterion iso-surface            [1/s2]
+#          streamLifeTime    tracking steps of the streamlines
+#        system/reportGeometry (dictionaries for system/reportFunctions)
+#          planeSurfaces     nPlanes cut planes per direction (x, y, z)
+#          noseSeeds         streamline seeds in front of the nose
+#          wakeSeeds         streamline seeds around the endplate tips
+#
+#  section: at y = yCentre + sectionY W (meshParameters; 0 for the
+#    symmetry plane of a half model), moved by half a surface cell so that it
+#    cuts a row of cells instead of lying on faces
+#  wake section: H/2 behind the trailing point, inside the near box
+#  profiles (system/profiles), on the section: vertical lines of the wake at
+#    x/H = 0.25, 0.5, 1, 1.5, 2 behind the trailing point, across the wake
+#    box, and the wake centre line at mid-height of the wing, from the
+#    trailing point to the end of the wake box; one point per surface cell
+#  (the probes of the Ahmed-body case, at the points of Tunay et al. 2014,
+#   have been removed)
+#  planes for the report (nPlanes per direction, course guidelines: 16): the
+#    near box, where the body and its near wake are, at the centres of
+#    nPlanes equal intervals
+#  report data cut by OpenFOAM, in parallel, at the last time
+#    (system/reportFunctions, run by scripts/report): ParaView then reads
+#    only these small surfaces and lines, never the volume mesh
+#    - Q iso-surface: Q = QStar (uInf/H)^2 (QStar in constant/caseSettings),
+#      Q made dimensionless with the body time scale H/uInf;
+#    - streamline seeds (as in the ParaView traces): a grid two surface cells
+#      in front of the nose, over 90 % of the frontal section, and two grids
+#      a quarter of H behind the trailing point around the tips of the
+#      endplates (|y| from 0.75 W to 1.15 W, z from H/2 below the wing
+#      elements to H/4 above them), where the tip vortices of the wing roll
+#      up: the lines through their cores spiral, as those of the C-pillar
+#      vortices of the Ahmed body (the Ahmed version seeded the base
+#      recirculation instead); one line every H/10; half model: only
+#      y >= yCentre (the images mirror them), at half a spacing from the
+#      symmetry plane so that no seed lies on a boundary face;
+#    - tracking steps: nSubCycle (5, streamlines.cfg) steps per cell, along
+#      twice the path from the seeds to the end of the wake box (the lines
+#      that loop in the wake), in surface cells (the smallest outside the
+#      layers)
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+. scripts/functions
+
+setVar cutY     $(calc "$yCentre + ${sectionY:-0} * $bodyHalfWidth + $surfaceCell / 2")
+setVar cutX     $(calc "$stlXmax + $bodyHeight / 2")
+
+# profiles: x/H from the trailing point, the wing from ZB to bodyTop
+H=$bodyHeight
+ZB=$(calc "$bodyTop - $H")
+i=0
+for x in 0.25 0.5 1 1.5 2; do
+    i=$((i + 1))
+    setVar prof${i}X $(calc "$stlXmax + $x * $H")
+done
+setVar zMidBody $(calc "$ZB + $H / 2")
+setVar profileN $(ceil "($wakeZmax - $wakeZmin) / $surfaceCell")
+setVar centreN  $(ceil "($wakeXmax - $stlXmax) / $surfaceCell")
+# planes: the near box
+setVar planeXmin $nearXmin; setVar planeXmax $nearXmax
+setVar planeYmin $nearYmin; setVar planeYmax $nearYmax
+setVar planeZmin $nearZmin; setVar planeZmax $nearZmax
+
+# Q iso-surface value
+QStar=$(getEntry QStar constant/caseSettings)
+setVar qIso $(calc "$QStar * ($uInf / $H)^2")
+
+# report geometry: planes and streamline seeds (system/reportGeometry)
+NP=${nPlanes:-16}
+SP=$(calc "$H / 10")                       # seed spacing
+W=$bodyHalfWidth
+ZC=$(calc "$ZB + $H / 2")                  # body mid-height
+if [ "$halfModel" = yes ]; then Y0=$yCentre; else Y0=$(calc "$yCentre - 0.9 * $W"); fi
+setVar streamLifeTime $(ceil "5 * 2 * ($wakeXmax - $stlXmin + 2 * $surfaceCell) / $surfaceCell")
+# seeds <x> <yFrom> <yTo> <zFrom> <zTo>: seed points of the streamlines,
+# one list entry "(x y z)" per point, on the plane x = <x>:
+#   - the rectangle y in [yFrom, yTo], z in [zFrom, zTo] is cut in ny x nz
+#     squares of side about SP (H/10), at least 1 per direction;
+#   - one point at the centre of each square.
+seeds () {
+    awk -v x="$1" -v ya="$2" -v yb="$3" -v za="$4" -v zb="$5" -v d="$SP" 'BEGIN {
+        ny = int((yb - ya) / d + 0.5); if (ny < 1) ny = 1
+        nz = int((zb - za) / d + 0.5); if (nz < 1) nz = 1
+        for (j = 0; j < nz; j++) for (i = 0; i < ny; i++)
+            printf "    (%.6g %.6g %.6g)\n", x, ya + (i + 0.5) * (yb - ya) / ny,
+                                             za + (j + 0.5) * (zb - za) / nz }'
+}
+{
+    echo "// reportGeometry -- written by scripts/postSetup: do not edit by hand."
+    echo "// Included by system/planes and system/*Streamlines."
+    echo
+    echo "planeSurfaces"
+    echo "{"
+    # cut planes of the report: nPlanes (NP) per direction x, y, z, evenly
+    # spaced in the near box (planeXmin...planeZmax), each at the centre of
+    # its slice; one cuttingPlane entry per plane (ESI; OpenFOAM.org:
+    # cutPlane), named x01...x16, y01..., z01...
+    for d in x y z; do
+        eval lo=\$plane$(echo $d | tr xyz XYZ)min hi=\$plane$(echo $d | tr xyz XYZ)max
+        awk -v d=$d -v lo="$lo" -v hi="$hi" -v n=$NP 'BEGIN {
+            for (i = 0; i < n; i++) {
+                c = lo + (i + 0.5) * (hi - lo) / n
+                printf "    %s%02d { type cuttingPlane; planeType pointAndNormal; interpolate true; ", d, i + 1
+                printf "pointAndNormalDict { point (%.6g %.6g %.6g); ", d == "x" ? c : 0, d == "y" ? c : 0, d == "z" ? c : 0
+                printf "normal (%d %d %d); } }\n", d == "x", d == "y", d == "z" } }'
+    done
+    echo "}"
+    echo
+    echo "noseSeeds"
+    echo "("
+    yb=$(calc "$yCentre + 0.9 * $W")
+    seeds $(calc "$stlXmin - 2 * $surfaceCell") $Y0 $yb \
+          $(calc "$ZC - 0.45 * $H") $(calc "$ZC + 0.45 * $H")
+    echo ");"
+    echo
+    echo "wakeSeeds"
+    echo "("
+    # tip vortices: around each endplate tip (only +y for a half model)
+    XT=$(calc "$stlXmax + $H / 4")
+    ZT0=$(calc "$ZB - $H / 2"); ZT1=$(calc "$bodyTop + $H / 4")
+    seeds $XT $(calc "$yCentre + 0.75 * $W") $(calc "$yCentre + 1.15 * $W") $ZT0 $ZT1
+    [ "$halfModel" = yes ] ||
+        seeds $XT $(calc "$yCentre - 1.15 * $W") $(calc "$yCentre - 0.75 * $W") $ZT0 $ZT1
+    echo ");"
+} > system/reportGeometry
+
+echo "sections: wing section y = $cutY m, wake x = $cutX m"
+echo "report: $NP planes per direction, $(grep -c '^    (' system/reportGeometry) streamline seeds, Q iso-surface at $qIso 1/s2"
+echo "profiles: 5 vertical ($profileN points), centre line ($centreN points)"

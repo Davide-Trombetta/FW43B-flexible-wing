@@ -1,0 +1,30 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Cut planes of the results report: nPlanes per direction across the near
+// box (positions: scripts/postSetup -> system/reportGeometry), with the
+// fields interpolated at the points. VTK binary: smaller and faster to read.
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "reportGeometry"
+
+type            surfaces;
+libs            (sampling);
+writeControl    writeTime;
+surfaceFormat   vtk;
+formatOptions   { vtk { legacy true; format binary; } }
+interpolationScheme cellPoint;
+
+fields          (UMean kMean pMean Cp0Mean);   // URANS: time averages
+                                // (system/reportFunctions reads and computes them)
+
+surfaces
+{
+    $planeSurfaces;
+}
+
+// ************************************************************************* //

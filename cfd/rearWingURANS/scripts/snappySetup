@@ -1,0 +1,122 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+#  snappySetup -- refinement, layers and snap values (used by
+#                 snappyHexMeshDict and meshQualityDict)
+#
+#  In:   system/meshParameters, system/meshVariables
+#  Out:  system/meshVariables
+#          wakeLevels                  extra level of the wake box for this size
+#          levelNear, levelWake        levels of the two refinement boxes
+#                                      (levelSurface - nearLevelDrop,
+#                                       levelSurface - wakeLevelDrop + wakeLevels)
+#          nearXmin..nearZmax          box around the body and near wake  [m]
+#          wakeXmin..wakeZmax          box of the wake                    [m]
+#                                      (top: wakeRise H above the body)
+#          shellDistance               fine shell around the body         [m]
+#          nLayers                     layers (the same for XS, S, M and L)
+#          firstLayerMesh, yPlusMesh   first layer and its y+ (same for XS, S, M and L)
+#          layerStackMesh              stack thickness (same for XS, S, M and L) [m]
+#          lastLayerRatio              last layer / surface cell (< 1)
+#          nSolveIter                  snap smoothing iterations
+#          minDeterminant              mesh-quality threshold
+#          insideX..insideZ            locationInMesh, a point in the fluid [m]
+#
+#  Layers: number N, first layer h1 and ratio r are the same for every mesh
+#    size (scripts/boundaryLayer: y+, nWallLayers, expansionRatio), so the whole layer stack is
+#    identical in XS, S, M and L and the size study changes only the cells outside
+#    it. The last layer / surface cell ratio is finalLayerThickness of the
+#    mesh size (system/meshParameters), always below 1.
+#  nSolveIter: the snap displacement is smoothed by a diffusion-like
+#    iteration, which after k iterations reaches about sqrt(k) cells; it must
+#    reach the edge of the fine region around the body (n cells): k = n^2.
+#  minDeterminant: the thinnest layer cell (aspect ratio AR = surface cell /
+#    first layer) has determinant 5832 / AR^4 as computed by OpenFOAM
+#    (meshCheck/primitiveMeshCheck.C, 8 for a cube); the default 0.001 would
+#    remove almost all the layers, so the threshold is half that value.
+#  locationInMesh (OpenFOAM.org: insidePoint): it must be in the fluid and never on a cell face.
+#    - position: halfway between the domain boundary and the wake box, i.e.
+#      upstream of the body (x), beside it (y) and above it (z), in the
+#      coarse region far from the body and from every refinement box;
+#    - cell face: snappyHexMesh splits each cell in two along every
+#      direction, so faces lie at k/2^n of a background cell (k, n integer);
+#      1/3 is never of that form, so the point is put at 1/3 of the
+#      background cell that contains it: it is never on a face, at any level.
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+. scripts/functions
+R=$expansionRatio
+H=$bodyHeight
+
+# 1. layers: the design stack of scripts/boundaryLayer, for every mesh size
+setVar nLayers        $nLayersDesign
+setVar firstLayerMesh $firstLayer
+setVar yPlusMesh      $(calc "$firstLayerMesh / 2 * $uTau / $nu")
+setVar layerStackMesh $layerStack
+setVar lastLayerRatio $(calc "$lastLayer / $surfaceCell")
+
+# 2. refinement regions
+eval WL=\${wakeLevels$meshSize:-0}
+case "$WL" in
+    0|1) ;;
+    *) echo "wakeLevels$meshSize = $WL: it must be 0 or 1 (system/meshParameters)"; exit 1 ;;
+esac
+setVar wakeLevels $WL
+# levels of the boxes below the surface level: nearLevelDrop and
+# wakeLevelDrop (meshParameters; 1 and 2, the values of the Ahmed-body case,
+# if missing). The wing needs larger drops: its surface cells (mm, from the
+# y+ = 1 layers) are much smaller than the size of its near wake.
+ND=${nearLevelDrop:-1}; WD=${wakeLevelDrop:-2}
+[ "$WD" -ge "$ND" ] || { echo "wakeLevelDrop must be >= nearLevelDrop"; exit 1; }
+setVar levelNear $((levelSurface - ND))
+setVar levelWake $((levelSurface - WD + WL))
+# flap and slot (system/snappyHexMeshDict, refinementRegions flapSurface):
+# one level more than the surface within flapRefineCells surface cells of
+# the flap (constant/triSurface/flap.stl, extracted by Allrun.pre)
+setVar levelFlap    $((levelSurface + 1))
+setVar flapDistance $(calc "${flapRefineCells:-2} * $surfaceCell")
+# box of the flap wake: from the leading point of the flap to flapWakeLength H
+# behind its trailing point, from the bottom of the wing elements (wake of the mainplane) to flapWakeRise H above the flap,
+# over the span of the flap
+setVar flapWakeXmin $flapXmin
+setVar flapWakeXmax $(calc "$flapXmax + ${flapWakeLength:-1.5} * $bodyHeight")
+setVar flapWakeYmin $flapYmin
+setVar flapWakeYmax $flapYmax
+setVar flapWakeZmin $(calc "$bodyTop - $bodyHeight")    # bottom of mainplane and flap
+setVar flapWakeZmax $(calc "$flapZmax + ${flapWakeRise:-0.5} * $bodyHeight")
+setVar levelFlapWake $((levelNear + 1))
+setVar shellDistance $(calc "$layerStackMesh + $nCellsBetweenLevels * $surfaceCell")
+setVar nearXmin $(calc "$stlXmin - $H / 2");  setVar nearXmax $(calc "$stlXmax + 2 * $H")
+# y: from the symmetry plane (half model) or as far on the other side;
+# z: from the ground, or from below the body if it does not touch it
+if [ "$halfModel" = yes ]; then YN=$stlYmin; YW=$stlYmin
+else YN=$(calc "$stlYmin - $H / 4"); YW=$(calc "$stlYmin - $H / 2"); fi
+ZN=$(calc "($stlZmin - $H / 4 > $ground) ? $stlZmin - $H / 4 : $ground")
+ZW=$(calc "($stlZmin - $H / 2 > $ground) ? $stlZmin - $H / 2 : $ground")
+setVar nearYmin $YN;                          setVar nearYmax $(calc "$stlYmax + $H / 4")
+setVar nearZmin $ZN;                          setVar nearZmax $(calc "$bodyTop + $H / 4")
+setVar wakeXmin $(calc "$stlXmin - $H");      setVar wakeXmax $(calc "$stlXmax + 2 * $bodyLength")
+setVar wakeYmin $YW;                          setVar wakeYmax $(calc "$stlYmax + $H / 2")
+setVar wakeZmin $ZW;                          setVar wakeZmax $(calc "$bodyTop + ${wakeRise:-0.5} * $H")
+
+# 3. snap iterations and mesh quality
+setVar nSolveIter $(ceil "($shellDistance / $surfaceCell + $nCellsBetweenLevels)^2")
+# minDeterminant: value for the flat layer cells (y+ ~ 1)
+D=$(calc "5832 * ($firstLayerMesh / $surfaceCell)^4 / 2")
+setVar minDeterminant $(calc "($D < 0.001) ? $D : 0.001")
+
+# 4. insideCoord <min> <max> <nCells> <point>: coordinate at 1/3 of the background
+# cell that contains <point>, so that locationInMesh is never on a cell face
+insideCoord () {
+    local h=$(calc "($2 - $1) / $3")              # background cell
+    local i=$(calc "int(($4 - $1) / $h)")         # index of the cell that contains the point
+    calc "$1 + ($i + 1/3) * $h"
+}
+setVar insideX $(insideCoord $xMin $xMax $nx $(calc "($xMin + $wakeXmin) / 2"))
+setVar insideY $(insideCoord $yMin $yMax $ny $(calc "($wakeYmax + $yMax) / 2"))
+setVar insideZ $(insideCoord $zMin $zMax $nz $(calc "($wakeZmax + $zMax) / 2"))
+
+echo "refinement: surface level $levelSurface ($surfaceCell m), shell $shellDistance m, near box level $levelNear, wake box level $levelWake (wakeLevels $wakeLevels)"
+echo "layers: $nLayers, first layer $firstLayerMesh m (y+ = $yPlusMesh), stack $layerStackMesh m"
+echo "   last layer / surface cell = $lastLayerRatio"
+echo "snap: nSolveIter $nSolveIter; quality: minDeterminant $minDeterminant"
+echo "locationInMesh: ($insideX $insideY $insideZ)"

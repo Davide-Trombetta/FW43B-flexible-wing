@@ -1,0 +1,36 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Drag, lift and pitching moment coefficients, every iteration:
+// postProcessing/forceCoeffs/<start>/coefficient.dat (columns found by
+// name in the header: Cd, Cl, CmPitch, ...)
+// Reference values from the STL and the flow (meshParameters, meshVariables)
+// Lift along +z: a downforce wing gives Cl < 0.
+// (OpenFOAM.org: forceCoeffsIncompressible.cfg, file forceCoeffs.dat)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshParameters"
+#include "meshVariables"
+
+type            forceCoeffs;
+libs            (forces);
+writeControl    timeStep;
+writeInterval   1;
+log             false;
+
+patches         $wallPatches;
+rho             rhoInf;
+rhoInf          $rhoInf;
+magUInf         $uInf;
+lRef            $refLength;     // chord of the wing elements (x length of refRegion)
+Aref            $refAreaValue;  // planform or frontal area (refArea)
+CofR            ($xCofR $yCentre $zCofR);   // quarter of the chord, centre plane
+liftDir         (0 0 1);
+dragDir         (1 0 0);
+pitchAxis       (0 1 0);
+
+// ************************************************************************* //

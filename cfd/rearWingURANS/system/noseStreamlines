@@ -1,0 +1,40 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Streamlines of the results report: from a grid two surface cells in front
+// of the wing, over 90 % of the frontal section, one line every H/10, traced
+// both ways (back to the inlet, round the wing and into the wake).
+// Run in parallel at the last time by scripts/report (system/reportFunctions).
+// Seeds and tracking steps: scripts/postSetup (system/reportGeometry,
+// streamLifeTime in system/meshVariables)
+// ESI: type streamLine, seeds "cloud", direction bidirectional
+// (OpenFOAM.org: streamlines.cfg, seeds "points", direction both)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshVariables"
+#include "reportGeometry"
+
+type            streamLine;
+libs            (fieldFunctionObjects);
+writeControl    writeTime;
+setFormat       vtk;
+
+U               UMean;          // URANS: streamlines of the time-averaged flow
+fields          (UMean);
+direction       bidirectional;
+lifeTime        $streamLifeTime;
+nSubCycle       5;
+cloud           noseTracks;
+
+seedSampleSet
+{
+    type        cloud;
+    axis        xyz;
+    points      $noseSeeds;
+}
+
+// ************************************************************************* //

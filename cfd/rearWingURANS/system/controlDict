@@ -1,0 +1,53 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshParameters"            // uInf
+timeScale       #eval{ 70 / $uInf }; // times designed at 70 m/s: same Courant number,
+                                     // steps per shedding period and periods averaged at any speed
+
+application     pimpleFoam;     // transient (URANS); the steady case uses
+                                // simpleFoam. Allrun reads the name from here
+
+startFrom       latestTime;
+startTime       0;
+stopAt          endTime;        // scripts/convergenceMonitor may set writeNow
+endTime         #eval{ 0.3 * $timeScale }; 
+deltaT          #eval{ 2.5e-4 * $timeScale };
+adjustTimeStep  no;             // fixed: every step costs the same work,
+                                // needed for the scaling benchmark
+maxCo           20;             // used only with adjustTimeStep yes
+
+writeControl    timeStep;
+writeInterval   200;            // every 0.05 s   
+purgeWrite      2;
+
+writeFormat     binary;
+writePrecision  8;
+writeCompression off;
+timeFormat      general;
+timePrecision   8;
+
+runTimeModifiable true;         // needed by the stop of scripts/convergenceMonitor
+
+// OpenFOAM.org reads system/functions by itself; ESI only reads the
+// "functions" sub-dictionary of controlDict, so the file is included here
+functions
+{
+    #include "functions"
+}
+
+// ************************************************************************* //

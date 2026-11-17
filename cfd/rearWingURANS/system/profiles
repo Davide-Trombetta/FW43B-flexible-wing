@@ -1,0 +1,52 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Velocity and pressure profiles on the wing section y = cutY, at every
+// write time: postProcessing/profiles/<time>/<line>_<fields>.xy (raw:
+// coordinate, fields; ESI writes scalars and vectors in separate files,
+// merged by tools/readSets.py)
+//   centreline   wake line at mid-height of the wing, from the trailing
+//                point to the end of the wake box (axis x)
+//   wake1..wake5 vertical lines at x/H = 0.25, 0.5, 1, 1.5, 2 behind the
+//                trailing point, across the wake box (axis z)
+// Positions and numbers of points from scripts/postSetup (meshVariables).
+// ESI: type sets, lines "uniform" (OpenFOAM.org: graph.cfg, lineUniform)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshVariables"
+
+type            sets;
+libs            (sampling);
+writeControl    writeTime;
+setFormat       raw;
+interpolationScheme cellPoint;
+
+fields          (U p k Cp0 UMean pMean Cp0Mean);   // mean: from timeStart on
+
+sets
+{
+    centreline
+    {
+        type    uniform;
+        axis    x;
+        start   ($stlXmax $cutY $zMidBody);
+        end     ($wakeXmax $cutY $zMidBody);
+        nPoints $centreN;
+    }
+    wake1 { type uniform; axis z; nPoints $profileN;
+            start ($prof1X $cutY $wakeZmin); end ($prof1X $cutY $wakeZmax); }
+    wake2 { type uniform; axis z; nPoints $profileN;
+            start ($prof2X $cutY $wakeZmin); end ($prof2X $cutY $wakeZmax); }
+    wake3 { type uniform; axis z; nPoints $profileN;
+            start ($prof3X $cutY $wakeZmin); end ($prof3X $cutY $wakeZmax); }
+    wake4 { type uniform; axis z; nPoints $profileN;
+            start ($prof4X $cutY $wakeZmin); end ($prof4X $cutY $wakeZmax); }
+    wake5 { type uniform; axis z; nPoints $profileN;
+            start ($prof5X $cutY $wakeZmin); end ($prof5X $cutY $wakeZmax); }
+}
+
+// ************************************************************************* //

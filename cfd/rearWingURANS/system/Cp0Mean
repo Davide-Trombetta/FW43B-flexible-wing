@@ -1,0 +1,24 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Total pressure coefficient of the time-averaged flow (pMean, UMean of
+// system/fieldAverage): wake losses in the images of the URANS case. Same
+// settings as Cp0. (Built from the mean fields, it is not the mean of the
+// instantaneous Cp0: the difference is the kinetic energy of the resolved
+// fluctuations, small outside the wake.)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "Cp0"
+
+timeStart       #eval{ 0.1 * 70 / $uInf };   // as system/fieldAverage: UMean, pMean exist from here on
+
+p               pMean;
+U               UMean;
+executeControl  writeTime;
+result          Cp0Mean;
+
+// ************************************************************************* //

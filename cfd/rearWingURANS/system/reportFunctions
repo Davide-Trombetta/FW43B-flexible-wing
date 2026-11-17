@@ -1,0 +1,44 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      reportFunctions;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+// Data for the images of the results report, extracted by OpenFOAM from the
+// last time, in parallel on the decomposed case (run by scripts/report):
+//
+//   mpirun -np <N> pimpleFoam -postProcess -parallel \
+//          -dict system/reportFunctions -latestTime
+//
+// (the solver of controlDict; OpenFOAM.org: foamPostProcess -solver
+// incompressibleFluid). URANS: everything is made from the time averages of
+// system/fieldAverage (UMean, pMean, kMean, read by readMean), the flow that
+// the means of Cd and Cl and the load of the FEM belong to. The solver in
+// -postProcess mode builds its fields and turbulence model, then runs only
+// these functions. Each one writes small surface / line files (VTK) in
+// postProcessing/<function>/<time>/: ParaView (tools/report/images.py) reads
+// only these and never the volume mesh. The positions are computed by
+// scripts/postSetup (system/meshVariables, system/reportGeometry).
+
+functions
+{
+    #includeFunc readMean         // system/readMean: UMean, pMean, kMean
+    #includeFunc QMean            // system/QMean: Q of UMean (iso-surface)
+    #includeFunc Cp0Mean          // system/Cp0Mean: Cp0 of the mean flow
+    #includeFunc planes           // system/planes: nPlanes cut planes per direction
+    #includeFunc isoSurfaces      // system/isoSurfaces: Q and Cp0 = 0
+    #includeFunc noseStreamlines  // system/noseStreamlines: from the leading edge
+    #includeFunc wakeStreamlines  // system/wakeStreamlines: wake and tip vortices
+}
+
+// ************************************************************************* //

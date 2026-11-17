@@ -1,0 +1,26 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Area-averaged pressure on the inlet patch, every iteration:
+// postProcessing/inletPressure/<start>/surfaceFieldValue.dat
+// (kinematic pressure p/rho [m2/s2]; the report gives it as Cp)
+// ESI: regionType patch; name inlet (OpenFOAM.org: patchValue.cfg, patch inlet)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+type            surfaceFieldValue;
+libs            (fieldFunctionObjects);
+writeControl    timeStep;
+writeInterval   1;
+log             false;
+writeFields     false;
+
+regionType      patch;
+name            inlet;
+operation       areaAverage;
+fields          (p);
+
+// ************************************************************************* //

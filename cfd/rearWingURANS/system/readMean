@@ -1,0 +1,17 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Reads the time averages of system/fieldAverage from the time processed
+// (system/reportFunctions): with -postProcess the solver builds only its own
+// fields (U, p, k, omega, nut), the others must be read explicitly.
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+type            readFields;
+libs            (fieldFunctionObjects);
+fields          (UMean pMean kMean);
+
+// ************************************************************************* //

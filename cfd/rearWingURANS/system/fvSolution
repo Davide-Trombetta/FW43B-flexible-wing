@@ -1,0 +1,83 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+solvers
+{
+    "(p|Phi)"                               // symmetric matrix: multigrid
+    {
+        solver           GAMG;
+        smoother         DICGaussSeidel;
+        tolerance        1e-6;
+        relTol           0.05;      
+        maxIter          50;        
+        minIter          3;         
+                                    
+    }
+
+    pFinal
+    {
+        $p;                 // same settings as "(p|Phi)"
+        relTol          0;  // last outer iteration: solve to the absolute tolerance
+    }
+
+    "(U|k|omega|epsilon)"           // asymmetric matrices
+    {
+        solver           PBiCGStab;
+        // smoother         GaussSeidel;
+        preconditioner  DILU;
+        // nSweeps          2;
+        tolerance        1e-6;
+        relTol           0.1;
+    }
+
+    "(U|k|omega|epsilon)Final"
+    {
+        $U;
+        relTol          0;
+    }
+}
+
+potentialFlow
+{
+    nNonOrthogonalCorrectors 5;   // Laplace equation for Phi: corrections for the non-orthogonal snapped cells
+}
+
+PIMPLE
+{
+    momentumPredictor        yes;
+    nOuterCorrectors         3;   // outer (SIMPLE-like) loops per time step: needed at Co > 1
+    nCorrectors              2;   // pressure corrections per outer loop (PISO)
+    nNonOrthogonalCorrectors 1;   // snapped cells are non-orthogonal
+    turbOnFinalIterOnly      yes; // k-omega solved once per time step
+}
+
+
+relaxationFactors
+{
+    equations
+    {
+        U           0.7;    // outer iterations 1-2: SIMPLE-like, stable at high Co
+        ".*Final"   1;      // last one: no relaxation, the time step stays consistent
+    }
+}
+
+cache
+{
+    grad(U);
+}
+
+// ************************************************************************* //
