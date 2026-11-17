@@ -69,6 +69,21 @@ ND=${nearLevelDrop:-1}; WD=${wakeLevelDrop:-2}
 [ "$WD" -ge "$ND" ] || { echo "wakeLevelDrop must be >= nearLevelDrop"; exit 1; }
 setVar levelNear $((levelSurface - ND))
 setVar levelWake $((levelSurface - WD + WL))
+# flap and slot (system/snappyHexMeshDict, refinementRegions flapSurface):
+# one level more than the surface within flapRefineCells surface cells of
+# the flap (constant/triSurface/flap.stl, extracted by Allrun.pre)
+setVar levelFlap    $((levelSurface + 1))
+setVar flapDistance $(calc "${flapRefineCells:-2} * $surfaceCell")
+# box of the flap wake: from the leading point of the flap to flapWakeLength H
+# behind its trailing point, from the bottom of the wing elements (wake of the mainplane) to flapWakeRise H above the flap,
+# over the span of the flap
+setVar flapWakeXmin $flapXmin
+setVar flapWakeXmax $(calc "$flapXmax + ${flapWakeLength:-1.5} * $bodyHeight")
+setVar flapWakeYmin $flapYmin
+setVar flapWakeYmax $flapYmax
+setVar flapWakeZmin $(calc "$bodyTop - $bodyHeight")    # bottom of mainplane and flap
+setVar flapWakeZmax $(calc "$flapZmax + ${flapWakeRise:-0.5} * $bodyHeight")
+setVar levelFlapWake $((levelNear + 1))
 setVar shellDistance $(calc "$layerStackMesh + $nCellsBetweenLevels * $surfaceCell")
 setVar nearXmin $(calc "$stlXmin - $H / 2");  setVar nearXmax $(calc "$stlXmax + 2 * $H")
 # y: from the symmetry plane (half model) or as far on the other side;

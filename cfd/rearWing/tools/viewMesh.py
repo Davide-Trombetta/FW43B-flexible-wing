@@ -151,9 +151,9 @@ view.ViewTime = 0.0
 full = (Reflect(Input=walls, Plane='Y', Center=y0, CopyInput=1)  # whole body
         if HALF else walls)
 
-# from behind, beside and above: upper surfaces, flap and endplates
+# from the front, beside and above, beside and above: upper surfaces, flap and endplates
 view.CameraParallelProjection = 0
-view.CameraPosition = [x1 + 1.2 * L, y0 - 1.4 * L, zTop + 0.9 * L]
+view.CameraPosition = [x0 - 1.2 * L, y0 - 1.4 * L, zTop + 0.9 * L]
 view.CameraFocalPoint = [0.5 * (x0 + x1), y0, zMid]
 view.CameraViewUp = [0.0, 0.0, 1.0]
 

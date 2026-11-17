@@ -122,6 +122,11 @@ if [ -n "$angle" ]; then
 fi
 [ -f $STLDIR/rearWing.stl ] || usage "no $STLDIR/rearWing.stl: use -angle <deg>"
 
+#- mainplane, flap, DRS pod and pylons alone, for the refinement of the wing
+#  elements, slot and junctions (snappyHexMeshDict, geometry elementsSurface)
+awk '/^solid rearWing_(mainPlane|flap|drsPod|pylons)/,/^endsolid/' $STLDIR/rearWing.stl > $STLDIR/elements.stl
+[ -s $STLDIR/elements.stl ] || { echo "no solids rearWing_mainPlane, flap, drsPod, pylons in $STLDIR/rearWing.stl"; exit 1; }
+
 #- tools/stlInfo (plain C++, no OpenFOAM library), built the first time
 cmake -S tools/stlInfo -B tools/stlInfo/build > /dev/null &&
     cmake --build tools/stlInfo/build > /dev/null ||

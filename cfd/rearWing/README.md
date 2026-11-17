@@ -139,15 +139,27 @@ python3 fsi/map_pressure.py structure/flap_0deg/ansys/rw_shell_medium_apdl.inp \
 
 ## 4. Mesh sizes
 
-(Is Changed) Same wall layers for every size (y+ = 1, 25 layers, growth 1.2: first layer
-10.8 µm, stack 5.1 mm); only `finalLayerThickness` changes:
-`surface cell = last layer / finalLayerThickness`.
+Near-wall treatment: **wall functions** (k-ω SST), target y+ = 100 at the first cell
+centre at 70 m/s (`uInf` of the mesh design). The same wall layers are used for every
+size (`system/meshParameters`, `scripts/boundaryLayer`):
 
-| Size | finalLayerThickness | Surface cell | Cells (estimate of `checkCells`, upper bound) |
-|---|---|---|---|
-| S | 0.35 | 2.45 mm | ≈ 17 M |
-| M | 0.455 | 1.88 mm | ≈ 31 M |
-| L | 0.59 | 1.45 mm | ≈ 55 M |
+| Layers | First layer | Growth | Last layer | Stack |
+|---|---|---|---|---|
+| 4 | 1.08 mm | 1.2 | 1.86 mm | 5.78 mm |
 
-At 70 m/s (`uInf` of the mesh design). The near box is 4 times, the wake box
-8 times coarser than the surface (`nearLevelDrop 2`, `wakeLevelDrop 3`).
+Only `finalLayerThickness` changes between sizes, and with it the surface cell
+(`surface cell = last layer / finalLayerThickness`). The refinement levels are fixed by
+mesh S, so every region of the mesh is scaled by the same factor: the refinement ratio
+between two sizes is r = 1.4 (cells × r³ ≈ 2.7), as required for the GCI study.
+
+| Size | finalLayerThickness | Surface cell | Cells | Use |
+|---|---|---|---|---|
+| XS | 0.236 | 7.9 mm | ≈ 0.8 M (estimate) | grid study (GCI) |
+| S  | 0.33  | 5.6 mm | 2.15 M (obtained; estimate 2.33 M) | production runs |
+| M  | 0.462 | 4.0 mm | ≈ 5.9 M (estimate) | grid study (GCI) |
+
+The near box is 4 times, the wake box 8 times coarser than the surface
+(`nearLevelDrop 2`, `wakeLevelDrop 3`); the mainplane, the flap, the DRS pod and the
+pylons get one more level within `flapRefineCells` surface cells of the flap, so that
+the 10 mm slot holds a few cells besides the layers.
+

@@ -8,7 +8,9 @@
 #
 #  In:   postProcessing/forceCoeffs/*/coefficient.dat (every restart folder;
 #        columns by name: coeffHistory in scripts/functions)
-#        constant/caseSettings: cdTolerance (no entry: the run goes to endTime)
+#        constant/caseSettings: cdTolerance (no entry: the run goes to endTime;
+#                               read again at every check, so it can be
+#                               changed during the run)
 #                               minStableIterations (no entry: no minimum)
 #  Out:  log.convergence, one line per check
 #        system/controlDict: stopAt writeNow when converged (Allrun puts
@@ -30,15 +32,17 @@
 #     cannot see it. The value is a choice (constant/caseSettings),
 #     based on the earlier runs.
 #  4. converged when, with the same tolerance cdTolerance:
-#     - standard error / |mean Cd| <= cdTolerance, for Cd and for Cl (Cl on
-#       the scale of Cd, since Cl can be close to zero: an oscillating Cl
-#       with a flat Cd is not converged)
+#     - standard error / |mean Cd| <= cdTolerance for Cd, and
+#       standard error / S <= cdTolerance for Cl, with S = max(|mean Cd|,
+#       |mean Cl|): the scale of Cd for a body whose Cl is close to zero
+#       (Ahmed body: an oscillating Cl with a flat Cd is not converged), the
+#       scale of Cl itself for a wing, whose |Cl| is much larger than Cd
+#       (with the scale of Cd the test on Cl would be |Cl|/Cd times stricter)
 #     - no drift, for Cd and for Cl: the means of the two halves of the
-#       stable part differ by less than cdTolerance * |mean Cd| (Cl on the
-#       scale of Cd, since Cl can be close to zero), or the difference is
-#       within their scatter (t test, 95 %: slow oscillations are not a
-#       drift). A slow drift can look flat to MSER and give a small standard
-#       error.
+#       stable part differ by less than cdTolerance * |mean Cd| for Cd and
+#       cdTolerance * S for Cl, or the difference is within their scatter
+#       (t test, 95 %: slow oscillations are not a drift). A slow drift can
+#       look flat to MSER and give a small standard error.
 #
 #  Then the run is asked to write its fields and stop (stopAt writeNow,
 #  read by the solver at the next iteration since runTimeModifiable is on).
@@ -65,11 +69,14 @@ pct () { fmt 2 "100 * $1"; }                 # fraction -> percent, 2 decimals
 sig () { [ "$1" = 1 ] && echo " (significant)"; }
 
 while sleep $CHECK; do
+    # read again at every check: cdTolerance can be changed during the run
+    TOL=$(foamDictionary -entry cdTolerance -value constant/caseSettings 2> /dev/null)
+    [ -n "$TOL" ] || continue
     # the whole history (every restart folder) and its statistics, with the
     # same code as scripts/report (scripts/history, tools/mser.awk):
     # FROM FROMCD FROMCL UNSTABLE N CDMEAN CDSE CLMEAN CLSE CDDRIFT CDSIG CLDRIFT CLSIG
     set -- $(coeffHistory | awk -v cd=3 -v cl=4 -v drift=1 -f tools/mser.awk)
-    FROM=$1; UNSTABLE=$4; N=$5; CD=$6; SE=$7; CLSE=$9
+    FROM=$1; UNSTABLE=$4; N=$5; CD=$6; SE=$7; CLM=$8; CLSE=$9
     CDDRIFT=${10}; CDSIG=${11}; CLDRIFT=${12}; CLSIG=${13}
     # last iteration: first column of the last row of the history
     LAST=$(coeffHistory | tail -1 | awk '{ print $1 }')
@@ -82,9 +89,12 @@ while sleep $CHECK; do
         # every quantity as a fraction of |mean Cd| (Cl too: it is close to zero)
         A=$(abs $CD)
         R=$(calc "$SE / $A")                  # standard error of the mean Cd
-        Q=$(calc "$CLSE / $A")                # standard error of the mean Cl
         RC=$(calc "$(abs $CDDRIFT) / $A")     # drift of Cd: 2nd half - 1st half
-        RL=$(calc "$(abs $CLDRIFT) / $A")     # drift of Cl
+        # Cl on the larger scale of |mean Cd| and |mean Cl|: |Cd| for a body
+        # with Cl close to zero (Ahmed), |Cl| for a wing (|Cl| >> Cd)
+        B=$(calc "($A > $(abs $CLM)) ? $A : $(abs $CLM)")
+        Q=$(calc "$CLSE / $B")                # standard error of the mean Cl
+        RL=$(calc "$(abs $CLDRIFT) / $B")     # drift of Cl
         # converged: standard errors within the tolerance, and no drift that
         # is both significant (t test) and larger than the tolerance
         OK=yes
@@ -99,7 +109,7 @@ while sleep $CHECK; do
             RES="running: transient (MSER start at the end of the first half, iteration $FROM of $LAST; Cd $(fmt 4 $CD), $DRIFTS)"
         else
             [ $OK = yes ] && RES="converged" || RES="running"
-            RES="$RES: Cd $(fmt 4 $CD) +- $(fmt 4 $SE) ($(pct $R) %), Cl +- $(fmt 4 $CLSE) ($(pct $Q) % of Cd), $DRIFTS, stable from iteration $FROM of $LAST"
+            RES="$RES: Cd $(fmt 4 $CD) +- $(fmt 4 $SE) ($(pct $R) %), Cl $(fmt 4 $CLM) +- $(fmt 4 $CLSE) ($(pct $Q) % of max(|Cd|,|Cl|)), $DRIFTS, stable from iteration $FROM of $LAST"
             [ "$UNSTABLE" = 1 ] &&
                 RES="$RES (MSER start at the end of the first half: a slow drift within the tolerance)"
         fi

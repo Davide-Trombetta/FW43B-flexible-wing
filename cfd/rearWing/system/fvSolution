@@ -30,9 +30,10 @@ solvers
 
     "(U|k|omega|epsilon)"           // asymmetric matrices
     {
-        solver           smoothSolver;
-        smoother         GaussSeidel;
-        nSweeps          2;
+        solver           PBiCGStab;
+        // smoother         GaussSeidel;
+        preconditioner  DILU;
+        // nSweeps          2;
         tolerance        1e-8;
         relTol           0.1;
     }
@@ -65,9 +66,9 @@ relaxationFactors
     //}
     equations
     {
-        U               0.9;    
-        k               0.9;    
-        "(omega|epsilon)" 0.9;  
+        U               0.7;    
+        k               0.7;    
+        "(omega|epsilon)" 0.7;  
     }
 }
 

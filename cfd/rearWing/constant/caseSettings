@@ -33,7 +33,7 @@ QStar               1;
 // Cd too: stricter for a wing, whose |Cl| is larger than Cd); endTime
 // (system/controlDict) is only an upper bound.
 // Remove it to run to endTime.
-cdTolerance         0.005;   // 0.5 %
+cdTolerance         0.01;   // 1 %
 // minStableIterations 1000;  minimum length of the stable part
 
 // Computed (ESI: #eval, the built-in expression parser; #calc of the Ahmed

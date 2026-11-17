@@ -18,4 +18,4 @@ cleanCase
 # kept too: Allrun.pre -angle replaces it)
 rm -rf 0 problemFaces badFaces report logs tools/stlInfo/build \
        constant/triSurface/*.eMesh constant/triSurface/*.obj \
-       constant/triSurface/rearSurface.stl constant/extendedFeatureEdgeMesh
+       constant/triSurface/rearSurface.stl constant/extendedFeatureEdgeMesh constant/triSurface/elements.stl

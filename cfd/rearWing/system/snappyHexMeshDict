@@ -55,7 +55,17 @@ geometry
         min ($wakeXmin $wakeYmin $wakeZmin);
         max ($wakeXmax $wakeYmax $wakeZmax);
     }
-    
+    elementsSurface             // mainplane, flap, DRS pod and pylons alone (Allrun.pre):
+    {                           // refinement of the wing elements and slot
+        type triSurfaceMesh;
+        file "elements.stl";
+    }
+    flapWakeBox                 // near wake of the flap (scripts/snappySetup)
+    {
+        type box;
+        min ($flapWakeXmin $flapWakeYmin $flapWakeZmin);
+        max ($flapWakeXmax $flapWakeYmax $flapWakeZmax);
+    }
     $rearGeometry;
 };
 
@@ -120,6 +130,16 @@ castellatedMeshControls
         {
             mode distance;
             levels    (($shellDistance $levelSurface));
+        }
+        elementsSurface
+        {
+            mode distance;
+            levels    (($flapDistance $levelFlap));
+        }
+        flapWakeBox
+        {
+            mode inside;
+            levels    ((1e15 $levelFlapWake));
         }
         $rearRegions;
     }

@@ -15,6 +15,9 @@
 #    layers         (wetted area / surfaceCell^2) faces x nLayers
 #    rear           rear area x rear distance / (surfaceCell/2)^3 (slant,
 #                   scripts/rearRefinement), and its extra layer faces
+#    flap           flap area x flapDistance / (surfaceCell/2)^3 (level of the
+#                   surface + 1), and its extra layer faces (4 times as many)
+#    flap wake      volume of flapWakeBox / (cell of levelFlapWake)^3
 #  Checks:
 #    estimate <= maxGlobalCells (otherwise snappyHexMesh stops refining
 #                                silently and the mesh is not the designed one)
@@ -36,10 +39,19 @@ C_REAR=0
 if [ -n "$levelRear" ] && [ "$levelRear" != none ]; then
     C_REAR=$(round "$rearArea * $rearDistanceMesh / ($surfaceCell / 2)^3 + 3 * $rearArea / $surfaceCell^2 * $nLayers")
 fi
-setVar estimatedCells $((C_BACK + C_WAKE + C_NEAR + C_SHELL + C_LAYERS + C_REAR))
+C_FLAP=0
+if [ -n "$levelFlap" ]; then
+    C_FLAP=$(round "$elementsArea * $flapDistance / ($surfaceCell / 2)^3 + 3 * $elementsArea / $surfaceCell^2 * $nLayers")
+fi
+C_FLAPWAKE=0
+if [ -n "$levelFlapWake" ]; then
+    CFW=$(calc "$backgroundCell / 2^$levelFlapWake")
+    C_FLAPWAKE=$(round "($flapWakeXmax - $flapWakeXmin) * ($flapWakeYmax - $flapWakeYmin) * ($flapWakeZmax - $flapWakeZmin) / $CFW^3")
+fi
+setVar estimatedCells $((C_BACK + C_WAKE + C_NEAR + C_SHELL + C_LAYERS + C_REAR + C_FLAP + C_FLAPWAKE))
 LIMIT=$((15000000 * NCORES / 8))
 
-echo "estimated cells: $estimatedCells (background $C_BACK, wake $C_WAKE, near $C_NEAR, shell $C_SHELL, layers $C_LAYERS, rear $C_REAR)"
+echo "estimated cells: $estimatedCells (background $C_BACK, wake $C_WAKE, near $C_NEAR, shell $C_SHELL, layers $C_LAYERS, rear $C_REAR, elements $C_FLAP, flap wake $C_FLAPWAKE)"
 if [ "$estimatedCells" -gt "$LIMIT" ]; then
     echo "too large for $NCORES cores (limit 15M cells every 8 cores = $LIMIT):"
     echo "use more cores or a smaller size."

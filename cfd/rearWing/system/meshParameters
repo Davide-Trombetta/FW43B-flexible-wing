@@ -54,6 +54,17 @@ wakeLevelDrop       3;      // wake box: levelSurface - wakeLevelDrop
                             // cells, here 4 and 8 times smaller than the
                             // cells of the boxes)
 
+flapRefineCells     2;      // mainplane, flap, DRS pod and pylons: cells within this many surface
+                            // cells of the flap get one level more than the
+                            // surface (half the size), so the slot between
+                            // mainplane and flap has 3-4 cells besides the layers
+
+flapWakeLength      2.5;    // box of the flap wake: from the flap to this
+                            // many H behind its trailing point          [H]
+flapWakeRise        0.5;    // ... and this many H above its top: the
+                            // wake of the flap goes up                  [H]
+                            // (level: near box + 1, about 1.1 cm)
+
 // Flow (ISA sea level). uInf: the speed of the run; Allrun -speed <U> sets it
 uInf                70;     // free-stream velocity [m/s]
 nu                  1.46e-5; // kinematic viscosity [m^2/s]

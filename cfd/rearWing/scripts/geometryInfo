@@ -81,6 +81,12 @@ setVar bodyTop       $(calc "($STL_ZMAX > $RZMAX) ? $STL_ZMAX : $RZMAX")
 setVar refLength     $(calc "$RXMAX - $RXMIN")
 setVar xCofR         $(calc "$RXMIN + 0.25 * $refLength")
 setVar zCofR         $(calc "($RZMIN + $RZMAX) / 2")
+# bounding box of the flap (scripts/snappySetup: box of the flap wake)
+[ -n "$STL_rearWing_flap_XMIN" ] || { echo "no region rearWing_flap in the STL"; exit 1; }
+setVar flapXmin $STL_rearWing_flap_XMIN;  setVar flapXmax $STL_rearWing_flap_XMAX
+setVar flapYmin $STL_rearWing_flap_YMIN;  setVar flapYmax $STL_rearWing_flap_YMAX
+setVar flapZmin $STL_rearWing_flap_ZMIN;  setVar flapZmax $STL_rearWing_flap_ZMAX
+setVar elementsArea $(calc "$STL_rearWing_mainPlane_AREA + $STL_rearWing_flap_AREA + $STL_rearWing_drsPod_AREA + $STL_rearWing_pylons_AREA")   # [m2]
 if [ "$groundContact" = yes ]; then
     # ground: lowest point rounded up to the millimetre, so that the legs
     # cross the ground plane (as in the original case)
