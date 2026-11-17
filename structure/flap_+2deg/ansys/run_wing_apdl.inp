@@ -16,6 +16,17 @@
 /PREP7
 /INPUT,materials_laminate_apdl,inp
 /INPUT,rw_shell_medium_apdl,inp
+! --- supports: add the rear part of the pylon base, left out of N_SUPPORT by
+!     the mesh file (the base rises by about 5 mm from front to rear)
+ESEL,S,SEC,,8                 ! pylons
+NSLE,S                        ! their nodes
+NSEL,R,LOC,X,3.65,3.75        ! rear part of the base
+NSEL,R,LOC,Z,0,0.4725         ! bottom: up to 1 mm above the rear base (z = 0.4712)
+CM,N_PYLON_REAR,NODE
+CMSEL,S,N_SUPPORT
+CMSEL,A,N_PYLON_REAR
+CM,N_SUPPORT,NODE             ! old supports + rear base
+ALLSEL
 ! --- constraints: translations fixed at the pylon base and at the endplate feet
 CMSEL,S,N_SUPPORT
 D,ALL,UX,0

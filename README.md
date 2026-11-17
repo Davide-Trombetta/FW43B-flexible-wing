@@ -2,7 +2,8 @@
 
 Course project, *High Performance Simulation Lab for Mechanical Engineering* (Politecnico di Milano).
 Williams FW43B(AR) 2021 rear wing: CFD with OpenFOAM, structural analysis of the composite shell with Ansys
-Mechanical APDL, one-way fluid–structure coupling, and a flap-angle study on one circuit (rigid vs flexible wing).
+Mechanical APDL, one-way fluid–structure coupling, and a flap-angle study on one circuit, the Circuit de
+Barcelona-Catalunya (rigid vs flexible wing).
 
 
 ## Repository layout
@@ -30,10 +31,28 @@ a flexible wing leads to a different choice of flap angle than a rigid one.
   (see `structure/README.md`).
 - **Five flap angles.** −4°, −2°, 0°, +2°, +4° (rigid rotation of the flap about its leading edge; positive = steeper
   flap, more downforce and more drag).
-- **One circuit, two speeds.** Two reference speeds from the 2021 qualifying telemetry: a corner speed
-  (where downforce matters) and a straight-line speed (where drag matters, DRS closed).
+- **One circuit, two speeds.** The Circuit de Barcelona-Catalunya (Spanish Grand Prix 2021): a medium-downforce
+  circuit, where the efficiency optimum falls in the middle of the flap-angle range and the standard rear wing
+  is representative, with a 1 km main straight and both slow and fast corners. Two reference speeds: a corner
+  speed (where downforce matters) and a straight-line speed (where drag matters, DRS closed); see
+  [Reference speeds](#reference-speeds).
 - **Rigid vs flexible.** For every angle and speed the wing is analysed rigid and deformed under its own
   aerodynamic loads (one-way fluid–structure coupling).
+
+### Reference speeds
+
+The speeds are **assumed values**, rounded from published data on the circuit, not taken from the telemetry of the
+FW43B: since October 2026 the Formula 1 data APIs used by FastF1 require an F1TV account, so
+`circuits/circuit_speeds.py` (which extracts them from the 2021 qualifying telemetry of a Williams driver) can only
+be run with such an account.
+
+| Speed | Value | Basis |
+|---|---|---|
+| Straight line, DRS closed | 310 km/h (86 m/s) | top speeds above 310 km/h at the end of the main straight; the DRS adds about 10–15 km/h, the CFD wing is DRS-closed |
+| Corner | 160 km/h (44 m/s) | typical apex speed of the medium-speed corners (Turns 1, 4, 7–8, 12); the slow corners (Turns 5, 10: 70–110 km/h) and the fast ones (Turn 3 about 240 km/h, Turn 9 about 265 km/h in 2021) lie on either side |
+
+Load ratio straight / corner: (310 / 160)² ≈ 3.8, so on the straight the wing carries about four times the
+corner load and deforms about four times as much. 
 
 ### Simulation pipeline (one angle, one speed)
 
@@ -85,6 +104,11 @@ fixed mesh (no dynamic mesh during the flow solution, no extra cost per time ste
 The deformed CFD then starts from the same initial field as the rigid one (`potentialFoam`), so that the two runs
 differ only in the geometry.
 
+This is the same mesh-motion approach as the previous year's project, where `displacementLaplacian` with a
+quadratic inverse-distance diffusivity moved the fluid mesh during a two-way preCICE coupling (there, radial
+basis functions were used by preCICE to map forces and displacements between the non-matching fluid and solid
+meshes, not to move the mesh). An RBF mesh-motion solver is not among the standard motion solvers of OpenFOAM
+v2306 and is not needed for displacements this small.
 
 ### Flap-angle selection
 
@@ -126,7 +150,9 @@ shift and the gain or loss in downforce and drag.
 ### Assumptions and limits
 
 - Isolated rear wing (no car upstream), DRS closed.
-- One circuit: the results are its corner and straight-line speeds; other circuits would need their own speeds.
+- One circuit, with two assumed reference speeds (rounded published values, not team telemetry); other circuits
+  would need their own speeds. The corner speed is a single representative value: the circuit has corners from
+  about 70 to 265 km/h.
 - Laminates and material data are assumed, not team data; the shell model is the outer skin only.
 - One-way coupling: the deformed-wing loads are not fed back to the structure; the structure is loaded with the
   time-averaged pressure (static analysis, no dynamic response to the wake shedding).
