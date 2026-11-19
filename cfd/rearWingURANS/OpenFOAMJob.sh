@@ -60,3 +60,5 @@ echo "Velocita: $SPEED m/s"
 ./Allrun -speed "$SPEED"
 
 echo "Simulazione completata: $CASE_DIR"
+
+"$BASE/FW43B-flexible-wing/cfd/rearWingURANS/pack_rigid.sh" -mesh "$CASE_DIR"
