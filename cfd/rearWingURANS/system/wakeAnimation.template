@@ -1,0 +1,86 @@
+// Wake animation (optional): instantaneous flow on two planes and the vortex
+// cores, written every few time steps at the end of the run, for a video in
+// ParaView. Off by default: a run writes it only if this file is copied to
+// system/wakeAnimation before Allrun (OpenFOAMJob.sh: qsub -v ...,ANIM=yes);
+// system/functions includes it with #sinclude.
+// No FoamFile header: #included inside the functions sub-dictionary.
+// Size: a few MB per plane and frame, more for the iso-surface (see README).
+
+// Q-criterion of the instantaneous velocity (the standard "Q" of
+// system/functions is computed at the write times only)
+wakeQ
+{
+    #include "meshParameters"       // uInf
+    type            Q;
+    libs            (fieldFunctionObjects);
+    field           U;
+    result          QInst;
+    timeStart       #eval{ 0.25 * 70 / $uInf };  // last 0.05 s at 70 m/s
+    executeControl  timeStep;
+    executeInterval 5;
+    writeControl    writeTime;      // QInst also written with the fields (not needed)
+    log             false;
+}
+
+// planes: every 5 time steps (1.25 ms at 70 m/s: about 14 frames per period
+// of a 58 Hz oscillation), 40 frames
+wakePlanes
+{
+    #include "meshParameters"
+    #include "meshVariables"        // cutY, cutX
+    type            surfaces;
+    libs            (sampling);
+    timeStart       #eval{ 0.25 * 70 / $uInf };
+    writeControl    timeStep;
+    writeInterval   5;
+    surfaceFormat   vtk;
+    formatOptions   { vtk { legacy true; format binary; } }
+    interpolationScheme cellPoint;
+    fields          (U p QInst);
+    surfaces
+    {
+        // wing section (side view): flap wake and its oscillation
+        ySection
+        {
+            type        cuttingPlane;
+            planeType   pointAndNormal;
+            pointAndNormalDict { point (0 $cutY 0); normal (0 1 0); }
+            interpolate true;
+        }
+        // plane across the wake (view from behind): endplate tip vortices
+        xWake
+        {
+            type        cuttingPlane;
+            planeType   pointAndNormal;
+            pointAndNormalDict { point ($cutX 0 0); normal (1 0 0); }
+            interpolate true;
+        }
+    }
+}
+
+// vortex cores in 3D: iso-surface Q = qIso, every 10 time steps (20 frames);
+// the largest files: remove this block to keep the planes only
+wakeVortices
+{
+    #include "meshParameters"
+    #include "meshVariables"        // qIso
+    type            surfaces;
+    libs            (sampling);
+    timeStart       #eval{ 0.25 * 70 / $uInf };
+    writeControl    timeStep;
+    writeInterval   10;
+    surfaceFormat   vtk;
+    formatOptions   { vtk { legacy true; format binary; } }
+    interpolationScheme cellPoint;
+    fields          (U);
+    surfaces
+    {
+        Q
+        {
+            type        isoSurface;
+            isoField    QInst;
+            isoValue    $qIso;
+            interpolate true;
+        }
+    }
+}

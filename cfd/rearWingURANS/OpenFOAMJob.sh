@@ -57,6 +57,9 @@ echo "Angolo: $ANGLE"
 echo "Velocita: $SPEED m/s"
 
 ./Allrun.pre -angle "$ANGLE" -mesh S -cores "$NSLOTS"
+if [ "${ANIM:-no}" = yes ]; then
+    cp system/wakeAnimation.template system/wakeAnimation
+fi
 ./Allrun -speed "$SPEED"
 
 echo "Simulazione completata: $CASE_DIR"

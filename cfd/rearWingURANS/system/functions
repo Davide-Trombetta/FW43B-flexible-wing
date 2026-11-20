@@ -37,5 +37,8 @@ fieldAverage                // system/fieldAverage: UMean, pMean, kMean (time av
 #includeFunc profiles       // system/profiles:    lines in the wake
 #includeFunc wingSurfaces   // system/wingSurfaces: sections, walls (VTK);
                             // walls.vtk is the input of fsi/map_pressure.py
+// optional wake animation: only if system/wakeAnimation exists (copied from
+// system/wakeAnimation.template, e.g. by OpenFOAMJob.sh with ANIM=yes)
+#sinclude "wakeAnimation"
 
 // ************************************************************************* //
