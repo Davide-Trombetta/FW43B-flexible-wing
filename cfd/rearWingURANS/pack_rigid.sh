@@ -41,9 +41,14 @@ if [ $MESH = yes ]; then
     tail -5 "$C/logs/log.reconstructParMesh" | grep -q "^End" ||
         { echo "reconstructParMesh did not end: see $C/logs/log.reconstructParMesh"; exit 1; }
     grep -m1 "cells:" "$C/logs/log.reconstructParMesh" || true
-    # layers per face (snappyHexMesh writes nSurfaceLayers in processor*/0)
-    (cd "$C" && reconstructPar -time 0 -fields '(nSurfaceLayers)' > logs/log.reconstructParLayers 2>&1) ||
+    # layers per face (snappyHexMesh writes nSurfaceLayers in processor*/0);
+    # reconstructPar leaves the 0/ folder out of the times unless asked
+    # (option -withZero, or -zeroTime in some versions: read from -help)
+    Z=$(reconstructPar -help 2>&1 | grep -oE -- '-(withZero|zeroTime)' | head -1)
+    (cd "$C" && reconstructPar $Z -time 0 -fields '(nSurfaceLayers)' > logs/log.reconstructParLayers 2>&1) ||
         echo "warning: nSurfaceLayers not reconstructed (see $C/logs/log.reconstructParLayers): no layer image"
+    [ -f "$C/0/nSurfaceLayers" ] ||
+        echo "warning: no $C/0/nSurfaceLayers (see $C/logs/log.reconstructParLayers): no layer image"
 else
     EXCL+=(--exclude="$B/constant/polyMesh")
 fi

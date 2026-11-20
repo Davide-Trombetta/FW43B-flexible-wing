@@ -11,6 +11,7 @@ cfd/**/[1-9]*/
 cfd/**/0.[0-9]*/
 *.foam
 *.OpenFOAM
+/results/
 
 # ---------- Ansys ----------
 *.rst

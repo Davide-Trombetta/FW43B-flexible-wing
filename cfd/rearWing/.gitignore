@@ -13,7 +13,7 @@ tools/*/build
 # workflow outputs
 postProcessing/
 logs/
-report/
+/report/
 log.*
 *.log
 *.out
