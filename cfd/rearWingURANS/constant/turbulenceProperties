@@ -23,6 +23,8 @@ RAS
 {
     RASModel        $turbulenceModel;  // OpenFOAM.org: model
 
+    kOmegaSSTCoeffs { a1 1; }
+
     turbulence      on;
 
     printCoeffs     on;
