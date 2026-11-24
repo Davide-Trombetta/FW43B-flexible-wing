@@ -62,7 +62,8 @@ if [ "${ANIM:-no}" = yes ]; then
 fi
 
 if [ -n "${A1:-}" ]; then
-    foamDictionary constant/momentumTransport -entry RAS/kOmegaSSTCoeffs/a1 -set "$A1"
+    foamDictionary constant/turbulenceProperties -entry RAS/kOmegaSSTCoeffs/a1 -add "$A1"
+    foamDictionary constant/turbulenceProperties -entry RAS -value
 fi
 
 ./Allrun -speed "$SPEED"
