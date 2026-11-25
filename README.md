@@ -61,8 +61,9 @@ The same chain is run for each of the 2 × 5 = 10 combinations of speed and flap
 1. **Rigid CFD** – unsteady RANS (OpenFOAM `pimpleFoam`, k-ω SST) on the isolated wing. The forces and the
    wall pressure are time averages over the developed flow (`fieldAverage`: `UMean`, `pMean`), after the
    start-up transient; the same run gives the shedding frequency of the wake.
-2. **Load transfer** – the mean wall pressure `pMean` is mapped onto the structural shell mesh with force
-   conservation (`fsi/map_pressure.py`, difference < 2 %).
+2. **Load transfer** – the mean wall pressure `pMean` is interpolated onto the structural shell mesh and the
+   total force is checked against the CFD (`fsi/map_pressure.py`, difference < 2 %; see
+   [Load transfer](#load-transfer-pressure-mapping)).
 3. **FEM** – linear static analysis in Ansys Mechanical APDL: displacements of the wing.
 4. **Mesh morphing** – the structural displacements are imposed on the wing walls of the rigid CFD mesh
    (`fsi/write_point_displacement.py`, `pointDisplacement`) and the volume mesh is moved once with
@@ -85,6 +86,88 @@ every chain identical and self-contained, the FEM load is the actual load at tha
 displacements with V²), and rigid and flexible wing are compared at the same speed and Reynolds number, so the
 difference is due to the deformation only. The two rigid runs of each angle also check that the coefficients
 are independent of speed.
+
+### Load transfer (pressure mapping)
+
+The CFD wall mesh and the structural shell mesh describe the same surface but do not match: the CFD walls are
+the polygonal boundary faces of the snappyHexMesh mesh (about 5 mm on the wing), the shell is made of quadratic
+triangles (SHELL281, about 14 mm). The wall pressure therefore has to be interpolated from one mesh to the other.
+`fsi/map_pressure.py` does this in a few steps.
+
+**Inputs**
+
+- CFD: `postProcessing/wingSurfaces/<last time>/walls.vtk`, written by the `wingSurfaces` function object. For
+  every wall face $j$ it gives the face centre $\mathbf{x}_j$, the area vector (unit normal $\mathbf{n}_j$, area $A_j$) and the time-averaged
+  kinematic pressure `pMean` (m²/s², pressure divided by density, as in every incompressible OpenFOAM solver).
+- Structure: `structure/flap_<angle>deg/ansys/rw_shell_<level>_apdl.inp` (`N` and `EN` commands). For every shell
+  element $e$ the script computes the centroid $\mathbf{c}_e$, the unit outward normal $\mathbf{n}_e$ and the area $A_e$ from its three
+  corner nodes.
+
+**Algorithm**
+
+1. **Gauge pressure.** $p_j = \rho\,(\bar{p}_j - p_\mathrm{ref})$, where $\bar{p}_j$ is `pMean`, $\rho = 1.225\ \mathrm{kg/m^3}$
+   and $p_\mathrm{ref} = 0$ (`--rho`, `--pref`).
+2. **Orientation.** OpenFOAM boundary normals point out of the fluid, i.e. into the wing. The script compares them
+   with the shell normals (median of $\mathbf{n}_j \cdot \mathbf{n}_e$ over nearest pairs) and flips them so that both point out of
+   the wing.
+3. **Neighbour search (k-d tree).** The CFD face centres are stored in a k-d tree (`scipy.spatial.cKDTree`), a
+   binary tree that splits space alternately along x, y and z. For each element centroid the $k = 16$ nearest CFD
+   faces are found in $O(\log N)$ operations instead of $O(N)$ for a brute-force search over all $N$ faces (`--k`).
+4. **Same-side filter.** Only the neighbours whose normal agrees with the element normal are kept:
+   $\mathbf{n}_j \cdot \mathbf{n}_e > 0.5$ (angle below 60°). Near the thin trailing edges of mainplane and flap the closest CFD faces
+   can belong to the opposite surface; without this filter the suction and pressure sides would be averaged
+   together and the load at the edges would be wrong. If no neighbour passes the filter (sharp edges), the nearest
+   face is used; the number of such elements is printed.
+5. **Inverse-distance weighting (Shepard's method).** The element pressure is a weighted mean of the selected
+   faces, with weights equal to the inverse of the distance $d_j = \lvert \mathbf{x}_j - \mathbf{c}_e \rvert$:
+
+   $$p_e = \frac{\sum_{j} w_j\, p_j}{\sum_{j} w_j}, \qquad w_j = \frac{1}{d_j}$$
+
+   This is the local form of Shepard's inverse-distance interpolation (power 1, only the $k$ nearest points).
+   Closer faces count more, the result always lies between the neighbouring CFD values (no overshoot), and a
+   uniform pressure is reproduced exactly.
+6. **Ansys load.** One command `SFE,e,2,PRES,,`$p_e$ per element: uniform pressure on face 2 (the outward face) of
+   SHELL281. A positive pressure on face 2 pushes along $-\mathbf{n}_e$, so a suction ($p_e < 0$) pulls the skin outward.
+   The file is read with `/INPUT` by `run_wing_apdl.inp`.
+7. **Force check.** The resultant pressure force of the CFD is compared with the force applied to the shell:
+
+   $$\mathbf{F}_\mathrm{CFD} = -\sum_j p_j\, \mathbf{n}_j\, A_j, \qquad \mathbf{F}_\mathrm{FEM} = -\sum_e p_e\, \mathbf{n}_e\, A_e$$
+
+   CFD walls that the shell model does not have (the
+   mount block, `rearWing_mount`) are detected as the faces farther than 20 mm from the shell (`--far`) and are
+   left out of $\mathbf{F}_\mathrm{CFD}$; their force is printed separately. The mapping is accepted if
+
+   $$\frac{\lvert \mathbf{F}_\mathrm{FEM} - \mathbf{F}_\mathrm{CFD} \rvert}{\lvert \mathbf{F}_\mathrm{CFD} \rvert} < 2\ \%$$
+
+   In Ansys the total reaction of the aerodynamic load step must then be $-\mathbf{F}_\mathrm{FEM}$.
+
+**Type of mapping.** In the terms of the fluid–structure coupling literature this is a *consistent* mapping: an
+intensive quantity (the pressure) is interpolated, and the total force is not imposed but checked afterwards. A
+*conservative* mapping would instead transfer nodal forces so that their sum is preserved exactly. The consistent
+approach is used here because the structural model is loaded with pressures (`SFE`) and because the CFD mesh is
+finer than the structural one, so each element pressure is an average of several CFD faces and the force error
+stays small (0.9 % at −2°, 86 m/s, mesh `medium`).
+
+**Limits.** The force is conserved only approximately (the error is reduced by refining the CFD or the shell
+mesh); the pressure is uniform over each element; the viscous wall shear stress is not transferred (it
+contributes to the drag but is small compared with the pressure loads that bend the wing).
+
+**References**
+
+- D. Shepard, *A two-dimensional interpolation function for irregularly-spaced data*, Proc. 23rd ACM National
+  Conference, 1968, pp. 517–524. [doi:10.1145/800186.810616](https://doi.org/10.1145/800186.810616)
+- J. L. Bentley, *Multidimensional binary search trees used for associative searching*, Communications of the ACM
+  18(9), 1975, pp. 509–517. [doi:10.1145/361002.361007](https://doi.org/10.1145/361002.361007)
+- A. de Boer, A. H. van Zuijlen, H. Bijl, *Review of coupling methods for non-matching meshes*, Computer Methods
+  in Applied Mechanics and Engineering 196(8), 2007, pp. 1515–1525.
+- A. de Boer, A. H. van Zuijlen, H. Bijl, *Comparison of conservative and consistent approaches for the coupling
+  of non-matching meshes*, Computer Methods in Applied Mechanics and Engineering 197(49), 2008, pp. 4284–4297.
+  [doi:10.1016/j.cma.2008.05.001](https://doi.org/10.1016/j.cma.2008.05.001)
+- C. Farhat, M. Lesoinne, P. Le Tallec, *Load and motion transfer algorithms for fluid/structure interaction
+  problems with non-matching discrete interfaces*, Computer Methods in Applied Mechanics and Engineering 157,
+  1998, pp. 95–114. [doi:10.1016/S0045-7825(97)00216-8](https://doi.org/10.1016/S0045-7825(97)00216-8)
+- preCICE documentation, *Mapping configuration* (consistent and conservative mappings):
+  <https://precice.org/configuration-mapping>
 
 ### Mesh morphing
 
@@ -165,8 +248,8 @@ shift and the gain or loss in downforce and drag.
 2. **Loads** – `fsi/map_pressure.py` maps the mean pressure onto the shell mesh of the same angle:
    ```
    python3 fsi/map_pressure.py structure/flap_0deg/ansys/rw_shell_medium_apdl.inp \
-           postProcessing/wingSurfaces/<time>/*.vtk --field pMean \
-           -o structure/flap_0deg/ansys/loads_pressure_apdl.inp
+           results/U<U>/flap0/rigid/postProcessing/wingSurfaces/<last time>/walls.vtk --field pMean \
+           --apdl structure/flap_0deg/ansys/loads_pressure_apdl.inp
    ```
    It prints the CFD force and the applied force (difference must be < 2 %).
 3. **Structure** – Mechanical APDL, `structure/flap_<angle>deg/ansys/run_wing_apdl.inp` (see `structure/README.md`).
