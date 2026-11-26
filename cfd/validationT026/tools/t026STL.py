@@ -2,8 +2,10 @@
 """
 t026STL.py -- STL of the Tyrrell 026 single-element wing with endplates
 (Zerihan 2001, PhD thesis, University of Southampton; Zerihan & Zhang 2000).
+Standard library only (no numpy/scipy): it runs with the python3 of the
+cluster inside Allrun.pre.
 
-Usage:  python3 t026STL.py <output.stl> [--alpha <deg>] [--coords table2.csv]
+Usage:  python3 t026STL.py <output.stl> [--alpha <deg>] [--coords t026_table2.csv]
 
 Geometry (thesis, section 2.2.1 and Table 2):
   profile     Table 2, "single element wing coordinates at reference
@@ -31,10 +33,8 @@ coefficient of forceCoeffs (liftDir 0 0 1) negative. Two solids:
 Units: metres.
 """
 import argparse
+import math
 import os
-
-import numpy as np
-from scipy.interpolate import PchipInterpolator
 
 C = 0.2234            # chord [m]
 B = 1.100             # span [m]
@@ -44,47 +44,94 @@ EP_Z0 = -0.0208       # bottom of the endplate from the leading edge [m] (Figure
 TIP_IN = 0.002        # the wing goes this far into each endplate [m]
 
 
+# ---------------------------------------------------------------- vectors
+def sub(a, b): return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+def cross(a, b): return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+def dot(a, b): return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+# ---------------------------------------------------------------- PCHIP
+def pchip(x, y):
+    """monotone piecewise cubic Hermite interpolant (Fritsch-Carlson, as
+    scipy.interpolate.PchipInterpolator, endpoint rule included)"""
+    n = len(x)
+    h = [x[i + 1] - x[i] for i in range(n - 1)]
+    m = [(y[i + 1] - y[i]) / h[i] for i in range(n - 1)]
+    d = [0.0] * n
+    for k in range(1, n - 1):
+        if m[k - 1] * m[k] <= 0:
+            d[k] = 0.0
+        else:
+            w1, w2 = 2 * h[k] + h[k - 1], h[k] + 2 * h[k - 1]
+            d[k] = (w1 + w2) / (w1 / m[k - 1] + w2 / m[k])
+
+    def edge(h0, h1, m0, m1):
+        dd = ((2 * h0 + h1) * m0 - h0 * m1) / (h0 + h1)
+        if math.copysign(1, dd) != math.copysign(1, m0):
+            return 0.0
+        if math.copysign(1, m0) != math.copysign(1, m1) and abs(dd) > abs(3 * m0):
+            return 3 * m0
+        return dd
+    d[0] = edge(h[0], h[1], m[0], m[1])
+    d[-1] = edge(h[-1], h[-2], m[-1], m[-2])
+
+    def f(t):
+        i = 0
+        while i < n - 2 and t > x[i + 1]:
+            i += 1
+        s = (t - x[i]) / h[i]
+        h00 = (1 + 2 * s) * (1 - s) ** 2
+        h10 = s * (1 - s) ** 2
+        h01 = s * s * (3 - 2 * s)
+        h11 = s * s * (s - 1)
+        return h00 * y[i] + h10 * h[i] * d[i] + h01 * y[i + 1] + h11 * h[i] * d[i + 1]
+    return f
+
+
 def profile(csv, n=160):
-    """closed profile (counter-clockwise in x-z seen from +y): suction surface
-    from the trailing edge to the leading edge, pressure surface back to the
-    trailing edge; points clustered at both edges (cosine spacing)"""
-    t = np.loadtxt(csv, delimiter=',', skiprows=1)
-    xs, ys, xp, yp = t.T
-    beta = np.linspace(0, np.pi, n)
-    xn = 0.5 * (1 - np.cos(beta))
+    """closed profile in the x-z plane: suction surface from the trailing
+    edge to the leading edge, pressure surface back to the trailing edge;
+    points clustered at both edges (cosine spacing)"""
+    rows = []
+    with open(csv) as fh:
+        next(fh)
+        for line in fh:
+            if line.strip():
+                rows.append([float(v) for v in line.split(',')])
+    xs = [r[0] for r in rows]; ys = [r[1] for r in rows]
+    xp = [r[2] for r in rows]; yp = [r[3] for r in rows]
     # interpolation in sqrt(x): smooth round the leading edge
-    fs = PchipInterpolator(np.sqrt(xs), ys)
-    fp = PchipInterpolator(np.sqrt(xp), yp)
-    zs, zp = fs(np.sqrt(xn)), fp(np.sqrt(xn))
-    lower = np.column_stack([xn, zs])[::-1]           # TE -> LE, suction (lower)
-    upper = np.column_stack([xn, zp])[1:]             # LE -> TE, pressure (upper)
-    P = np.vstack([lower, upper]) * C
-    return P            # first point: TE suction, last point: TE pressure (open)
+    fs = pchip([math.sqrt(v) for v in xs], ys)
+    fp = pchip([math.sqrt(v) for v in xp], yp)
+    xn = [0.5 * (1 - math.cos(math.pi * k / (n - 1))) for k in range(n)]
+    lower = [(x, fs(math.sqrt(x))) for x in xn][::-1]     # TE -> LE, suction (lower)
+    upper = [(x, fp(math.sqrt(x))) for x in xn][1:]       # LE -> TE, pressure (upper)
+    return [(p[0] * C, p[1] * C) for p in lower + upper]
 
 
 def area2(P):
-    x, z = P[:, 0], P[:, 1]
-    return 0.5 * np.sum(x * np.roll(z, -1) - np.roll(x, -1) * z)
+    return 0.5 * sum(P[i][0] * P[i - len(P) + 1][1] - P[i - len(P) + 1][0] * P[i][1] for i in range(len(P)))
 
 
 def earclip(P):
     """triangulation of a simple polygon (counter-clockwise), ear clipping"""
-    idx = list(range(len(P))); tris = []
-    def cross(o, a, b):
+    def cr(o, a, b):
         return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
     def inside(p, a, b, c):
-        return cross(a, b, p) >= 0 and cross(b, c, p) >= 0 and cross(c, a, p) >= 0
-    guard = 0
-    while len(idx) > 3 and guard < 100000:
-        guard += 1
+        return cr(a, b, p) >= 0 and cr(b, c, p) >= 0 and cr(c, a, p) >= 0
+    idx = list(range(len(P))); tris = []
+    while len(idx) > 3:
         for k in range(len(idx)):
             i0, i1, i2 = idx[k - 1], idx[k], idx[(k + 1) % len(idx)]
             a, b, c = P[i0], P[i1], P[i2]
-            if cross(a, b, c) <= 1e-14:
+            if cr(a, b, c) <= 1e-14:
                 continue
             if any(inside(P[j], a, b, c) for j in idx if j not in (i0, i1, i2)):
                 continue
             tris.append((i0, i1, i2)); idx.pop(k); break
+        else:
+            raise SystemExit('triangulation of the profile failed')
     tris.append(tuple(idx))
     return tris
 
@@ -98,35 +145,35 @@ def extrude(P, y0, y1):
         T.append((A[i], A[j], Bv[j])); T.append((A[i], Bv[j], Bv[i]))
     for a, b, c in earclip(P):
         T.append((Bv[a], Bv[b], Bv[c])); T.append((A[a], A[c], A[b]))
-    return np.array(T)
+    return T
 
 
 def orient_outward(T):
-    vol = np.einsum('ij,ij->i', T[:, 0], np.cross(T[:, 1], T[:, 2])).sum() / 6
-    return (T[:, ::-1] if vol < 0 else T), abs(vol)
+    vol = sum(dot(t[0], cross(t[1], t[2])) for t in T) / 6
+    return ([t[::-1] for t in T] if vol < 0 else T), abs(vol)
 
 
 def box(x0, x1, y0, y1, z0, z1):
-    P = np.array([(x0, z0), (x1, z0), (x1, z1), (x0, z1)])
-    return extrude(P, y0, y1)
+    return extrude([(x0, z0), (x1, z0), (x1, z1), (x0, z1)], y0, y1)
 
 
 def rotate(T, dalpha, xc, zc):
     """rotation about the y axis through (xc, zc): dalpha > 0 lowers the
     leading edge (more incidence for the inverted wing)"""
-    a = np.radians(dalpha)
-    X, Z = T[..., 0] - xc, T[..., 2] - zc
-    T = T.copy()
-    T[..., 0] = xc + X * np.cos(a) - Z * np.sin(a)
-    T[..., 2] = zc + X * np.sin(a) + Z * np.cos(a)
-    return T
+    ca, sa = math.cos(math.radians(dalpha)), math.sin(math.radians(dalpha))
+
+    def r(p):
+        X, Z = p[0] - xc, p[2] - zc
+        return (xc + X * ca - Z * sa, p[1], zc + X * sa + Z * ca)
+    return [tuple(r(p) for p in t) for t in T]
 
 
 def write(f, name, T):
     f.write(f'solid {name}\n')
     for t in T:
-        n = np.cross(t[1] - t[0], t[2] - t[0]); n /= max(np.linalg.norm(n), 1e-30)
-        f.write(f'  facet normal {n[0]:.7e} {n[1]:.7e} {n[2]:.7e}\n    outer loop\n')
+        nv = cross(sub(t[1], t[0]), sub(t[2], t[0]))
+        ln = math.sqrt(dot(nv, nv)) or 1e-30
+        f.write(f'  facet normal {nv[0] / ln:.7e} {nv[1] / ln:.7e} {nv[2] / ln:.7e}\n    outer loop\n')
         for p in t:
             f.write(f'      vertex {p[0]:.9e} {p[1]:.9e} {p[2]:.9e}\n')
         f.write('    endloop\n  endfacet\n')
@@ -148,12 +195,10 @@ def main():
     plates = []
     for s in (-1, 1):
         y0, y1 = (h, h + EP_T) if s > 0 else (-h - EP_T, -h)
-        b, _ = orient_outward(box(EP_X0, EP_X0 + EP_L, y0, y1, EP_Z0, EP_Z0 + EP_H))
-        plates.append(b)
-    plates = np.vstack(plates)
+        plates += orient_outward(box(EP_X0, EP_X0 + EP_L, y0, y1, EP_Z0, EP_Z0 + EP_H))[0]
 
     # quarter chord on the chord line (leading edge (0, 0) - mid trailing edge)
-    te = 0.5 * (P[0] + P[-1])
+    te = (0.5 * (P[0][0] + P[-1][0]), 0.5 * (P[0][1] + P[-1][1]))
     xc, zc = 0.25 * te[0], 0.25 * te[1]
     d = a.alpha - 1.0
     wing, plates = rotate(wing, d, xc, zc), rotate(plates, d, xc, zc)
@@ -161,12 +206,14 @@ def main():
     with open(a.output, 'w') as f:
         write(f, 'wing', wing)
         write(f, 'endplates', plates)
-    allp = np.vstack([wing.reshape(-1, 3), plates.reshape(-1, 3)])
+    pts = [p for t in wing + plates for p in t]
+    lo = [round(min(p[i] for p in pts), 4) for i in range(3)]
+    hi = [round(max(p[i] for p in pts), 4) for i in range(3)]
     print(f'{a.output}: wing {len(wing)} triangles (volume {vw * 1e6:.1f} cm3), endplates {len(plates)} triangles')
     print(f'   quoted alpha {a.alpha:g} deg = true incidence {a.alpha + 2.45:g} deg')
-    print(f'   bounding box {np.round(allp.min(0), 4)} - {np.round(allp.max(0), 4)} m')
+    print(f'   bounding box {lo} - {hi} m')
     print(f'   reference: c = {C} m, b = {B} m, S = c b = {C * B:.5f} m2, '
-          f'lowest point of the wing z = {wing[..., 2].min():.4f} m')
+          f'lowest point of the wing z = {min(p[2] for t in wing for p in t):.4f} m')
 
 
 if __name__ == '__main__':

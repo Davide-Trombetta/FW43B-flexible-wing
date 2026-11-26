@@ -24,10 +24,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('folder')
     ap.add_argument('-o', '--out', default='a1_study')
+    ap.add_argument('--yplus', action='store_true', help='include the y+ sensitivity runs (a1_<A1>_yp<YPLUS>)')
     a = ap.parse_args()
 
     rows = []
-    for f in glob.glob(os.path.join(a.folder, '*', 'report', 'results', 'validation.csv')):
+    for f in glob.glob(os.path.join(a.folder, 'a1_*', 'report', 'results', 'validation.csv')):
+        if '_yp' in f and not a.yplus:      # y+ sensitivity runs: only with --yplus
+            continue
         with open(f) as fh:
             for r in csv.DictReader(fh):
                 r['run'] = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(f))))

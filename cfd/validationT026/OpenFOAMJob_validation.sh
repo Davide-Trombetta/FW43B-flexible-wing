@@ -9,7 +9,9 @@
 #    ALPHA  quoted incidence [deg]               (default 11; true = ALPHA + 2.45)
 #    MESH   mesh size XS, S, M or L              (default S)
 #    SPEED  free-stream velocity [m/s]           (default: uInf of meshParameters, 30)
+#    YPLUS  design y+ of the first cell centre   (default: yPlus of meshParameters, 26)
 #  Results in /global-scratch/<user>/results/validation/T026/alpha<ALPHA>/a1_<A1>
+#  (with YPLUS: .../a1_<A1>_yp<YPLUS>, a y+ sensitivity run)
 #  (report/results/validation.csv: CFD against experiment for this run)
 #
 #  Usage (from the folder of this script):
@@ -40,7 +42,8 @@ case "$MESH" in XS|S|M|L) ;; *) echo "Mesh non valida: $MESH"; exit 1 ;; esac
 BASE="/global-scratch/$(id -un)"
 REPO="$BASE/FW43B-flexible-wing"
 SOURCE="$REPO/cfd/validationT026"
-CASE_DIR="$BASE/results/validation/T026/alpha${ALPHA}/a1_${A1}"
+export GEOMETRY_DIR="$REPO/geometry"      # T026_alpha<ALPHA>.stl (Allrun.pre)
+CASE_DIR="$BASE/results/validation/T026/alpha${ALPHA}/a1_${A1}${YPLUS:+_yp$YPLUS}"
 
 [ -d "$SOURCE" ] || { echo "Caso sorgente non trovato: $SOURCE"; exit 1; }
 if ls -d "$SOURCE"/processor* "$SOURCE"/constant/polyMesh "$SOURCE"/tools/stlInfo/build > /dev/null 2>&1; then
@@ -50,6 +53,12 @@ mkdir -p "$(dirname "$CASE_DIR")"
 mkdir "$CASE_DIR" || { echo "La cartella del caso esiste gia: $CASE_DIR"; exit 1; }
 cp -a "$SOURCE/." "$CASE_DIR/"
 cd "$CASE_DIR"
+
+# design y+ of this run (optional): system/meshParameters
+if [ -n "${YPLUS:-}" ]; then
+    sed -i "s|^\(yPlus[[:space:]]\{1,\}\)[^;]*;|\1$YPLUS;|" system/meshParameters
+    echo "yPlus = $(foamDictionary system/meshParameters -entry yPlus -value 2> /dev/null || grep -m1 '^yPlus' system/meshParameters)"
+fi
 
 # a1 of this run: constant/caseSettings, read by constant/turbulenceProperties
 sed -i "s|^\(a1[[:space:]]\{1,\}\)[^;]*;|\1$A1;|" constant/caseSettings

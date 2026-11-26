@@ -19,11 +19,11 @@ Usage: ${0##*/} [OPTIONS]
 options:
   -a | -alpha <deg>      incidence of the wing as quoted by Zerihan (true
                          incidence = alpha + 2.45 deg; reference 1, default
-                         11): tools/t026STL.py writes the Tyrrell 026 wing and
-                         its endplates, from the coordinates of the thesis
-                         (tools/t026_table2.csv), in the frame of the FW43B
-                         case (x flow, y span, z up), to
-                         constant/triSurface/wing.stl.
+                         11): copies \$GEOMETRY_DIR/T026_alpha<alpha>.stl
+                         (default GEOMETRY_DIR: ../../geometry) to
+                         constant/triSurface/wing.stl; if that file is not
+                         there, tools/t026STL.py writes it from the
+                         coordinates of the thesis (tools/t026_table2.csv).
   -c | -cores <nCores>   number of cores in parallel run
   -h | -help             help
   -m | -mesh <S|M|L>     mesh size (default S): same layers (y+, number,
@@ -114,9 +114,20 @@ done
 #  summary.csv = angle of attack here)
 STLDIR=constant/triSurface
 mkdir -p $STLDIR
-python3 tools/t026STL.py $STLDIR/wing.stl --alpha "$alpha" || exit 1
+# the STL of the repository (geometry/T026_alpha<alpha>.stl) if there is
+# one; otherwise tools/t026STL.py writes it (standard Python only)
+SRC=${GEOMETRY_DIR:-../../geometry}/T026_alpha${alpha}.stl
+if [ -f "$SRC" ]; then
+    cp "$SRC" $STLDIR/wing.stl
+    echo "geometry: $SRC"
+else
+    python3 tools/t026STL.py $STLDIR/wing.stl --alpha "$alpha" || exit 1
+    echo "geometry: tools/t026STL.py (no $SRC)"
+fi
+grep -q '^solid wing' $STLDIR/wing.stl && grep -q '^solid endplates' $STLDIR/wing.stl ||
+    { echo "$STLDIR/wing.stl: the solids must be named wing and endplates"; exit 1; }
 echo "$alpha" > $STLDIR/flapAngle
-echo "geometry: Tyrrell 026 single-element wing, quoted alpha = $alpha deg"
+echo "Tyrrell 026 single-element wing, quoted alpha = $alpha deg (true $(awk -v a=$alpha 'BEGIN{print a + 2.45}') deg)"
 
 #- the elements refined one level more within flapRefineCells surface cells
 #  (snappyHexMeshDict, geometry elementsSurface): in the FW43B case mainplane,
