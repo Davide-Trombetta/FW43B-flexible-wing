@@ -1,0 +1,192 @@
+#!/bin/sh
+cd "${0%/*}" || exit 1    # run from this directory
+
+# Source tutorial run functions (ESI v2306: $WM_PROJECT_DIR/bin/tools)
+. "$WM_PROJECT_DIR/bin/tools/RunFunctions"
+
+#- all the logs (log.*) are written in the case directory, as usual, and
+#  moved into logs/ when this script ends, also on an error or on Ctrl+C
+moveLogs () { mkdir -p logs && mv log.* logs/ 2> /dev/null; }
+trap moveLogs EXIT
+trap 'exit 1' INT TERM
+
+usage () {
+    exec 1>&2
+    while [ "$#" -ge 1 ]; do echo "$1"; shift; done
+    cat <<USAGE
+
+Usage: ${0##*/} [OPTIONS]
+options:
+  -a | -alpha <deg>      incidence of the wing as quoted by Zerihan (true
+                         incidence = alpha + 2.45 deg; reference 1, default
+                         11): tools/t026STL.py writes the Tyrrell 026 wing and
+                         its endplates, from the coordinates of the thesis
+                         (tools/t026_table2.csv), in the frame of the FW43B
+                         case (x flow, y span, z up), to
+                         constant/triSurface/wing.stl.
+  -c | -cores <nCores>   number of cores in parallel run
+  -h | -help             help
+  -m | -mesh <S|M|L>     mesh size (default S): same layers (y+, number,
+                         ratio), finalLayerThickness<S|M|L> of meshParameters
+
+Generates the mesh of the validation wing (Tyrrell 026 single-element wing,
+Zerihan 2001), with the same rules as the FW43B case (cfd/rearWing). The values chosen by hand are in
+system/meshParameters; all the others are computed by the scripts in
+scripts/ and written in system/meshVariables, included by the dictionaries.
+
+USAGE
+    exit 1
+}
+
+# runScript <name> [args]: runs scripts/<name>, output in log.<name>
+runScript () {
+    _s="$1"; shift
+    scripts/$_s "$@" > log.$_s 2>&1 || { cat log.$_s; exit 1; }
+    cat log.$_s
+}
+
+# the physical cores of this machine (Open MPI default), not the hardware
+# threads that nproc gives
+checkCores () {
+    _n="$1"
+    case "$_n" in
+        ''|*[!0-9]*) echo "Invalid number of cores: '$_n'"; return 1 ;;
+    esac
+    _max=$(lscpu -p=Core,Socket 2> /dev/null | grep -v '^#' | sort -u | wc -l)
+    [ "$_max" -ge 1 ] || _max=$(nproc)
+    if [ "$_n" -lt 1 ] || [ "$_n" -gt "$_max" ]; then
+        echo "The number of cores must be between 1 and $_max"
+        return 1
+    fi
+}
+
+# setKeyword <entry> <value> <dict>: as setLine of scripts/functions
+# (sed: ESI foamDictionary -set would rewrite the file without comments)
+setKeyword () {
+    sed -i "s|^\([[:space:]]*$1[[:space:]]\{1,\}\)[^;]*;|\1$2;|" "$3"
+}
+
+#- nCores <= the available physical cores
+mesh=S
+nCores=8
+alpha=11
+
+while [ "$#" -gt 0 ]
+do
+   case "$1" in
+   -a | -alpha)
+      [ "$#" -ge 2 ] || usage "'$1' option requires an argument"
+      alpha=$2
+      shift 2
+      echo "$alpha" | grep -qE '^[+-]?[0-9]+([.][0-9]*)?$' ||
+          usage "Invalid argument '$alpha' to -a|-alpha <deg>."
+      ;;
+   -c | -cores)
+      [ "$#" -ge 2 ] || usage "'$1' option requires an argument"
+      nCores=$2
+      checkCores "$2" || usage
+      shift 2
+      ;;
+   -h | -help)
+      usage
+      ;;
+   -m | -mesh)
+      [ "$#" -ge 2 ] || usage "'$1' option requires an argument"
+      mesh=$2
+      shift 2
+      case "$mesh" in
+          S|M|L) ;;
+          *)  usage "Invalid argument '$mesh' to -m|-mesh <S|M|L>." ;;
+      esac
+      ;;
+   -*)
+      usage "Invalid option '$1'"
+      ;;
+   *)
+      break
+      ;;
+    esac
+done
+
+#- geometry: the wing at the angle of attack (always the same file name, so
+#  that the dictionaries never change); the angle is kept in
+#  constant/triSurface/flapAngle, read by the reports (column flapAngle of
+#  summary.csv = angle of attack here)
+STLDIR=constant/triSurface
+mkdir -p $STLDIR
+python3 tools/t026STL.py $STLDIR/wing.stl --alpha "$alpha" || exit 1
+echo "$alpha" > $STLDIR/flapAngle
+echo "geometry: Tyrrell 026 single-element wing, quoted alpha = $alpha deg"
+
+#- the elements refined one level more within flapRefineCells surface cells
+#  (snappyHexMeshDict, geometry elementsSurface): in the FW43B case mainplane,
+#  flap, DRS pod and pylons, i.e. the whole wing but endplates and mount;
+#  here the wing without its endplates (region wing)
+awk '/^solid wing$/,/^endsolid wing$/' $STLDIR/wing.stl > $STLDIR/elements.stl
+[ -s $STLDIR/elements.stl ] || { echo "no solid wing in $STLDIR/wing.stl"; exit 1; }
+
+#- tools/stlInfo (plain C++, no OpenFOAM library), built the first time
+cmake -S tools/stlInfo -B tools/stlInfo/build > /dev/null &&
+    cmake --build tools/stlInfo/build > /dev/null ||
+    { echo "cannot build tools/stlInfo"; exit 1; }
+
+[ ! -d 0 ] && cp -r 0.orig 0
+
+#- mesh design: from the STL and the boundary layer to the dictionaries
+runScript geometryInfo                  # STL sizes and areas
+runScript boundaryLayer $mesh           # first layer, layers, surface cell
+runScript backgroundMesh                # domain, blockMeshDict
+runScript snappySetup                   # snappyHexMeshDict
+runScript rearRefinement                # Ahmed-body slant: off for the wing
+runScript postSetup                     # sections, streamline seeds
+runScript checkCells $nCores            # stop here if the mesh is too large
+
+#- create the background mesh
+runApplication blockMesh
+
+#- generate the .eMesh file (OpenFOAM.org: surfaceFeatures)
+runApplication surfaceFeatureExtract
+
+#- set number of subdomains
+setKeyword numberOfSubdomains "$nCores" system/decomposeParDict
+
+#- decompose the background domain for parallel calculation
+runApplication decomposePar -copyZero
+[ -d processor0 ] || { echo "decomposePar failed: see logs/log.decomposePar"; exit 1; }
+
+#- mesh in parallel; ESI writes a new time folder unless -overwrite
+#  (OpenFOAM.org overwrites by default)
+runParallel snappyHexMesh -overwrite
+
+# clean unused files
+rm -rf sets constant/extendedFeatureEdgeMesh processor*/constant/extendedFeatureEdgeMesh
+
+runParallel checkMesh
+
+#- fail fast: stop here if snappyHexMesh did not finish or checkMesh does
+#  not report "Mesh OK"
+if ! grep -q "^Finished meshing" log.snappyHexMesh 2> /dev/null; then
+    echo "snappyHexMesh did not finish: see logs/log.snappyHexMesh"; exit 1
+fi
+if ! grep -q "Mesh OK" log.checkMesh 2> /dev/null; then
+    echo "checkMesh failed: see logs/log.checkMesh"
+    grep -E "\*\*\*|Failed" log.checkMesh 2> /dev/null | head -5
+    exit 1
+fi
+
+#- mesh images (viewMesh.py, ParaView): report/mesh/fig/mesh_*.png
+#  without a display (ssh, WSL without X) inside a virtual one (xvfb-run)
+PVBATCH="pvbatch --force-offscreen-rendering"
+[ -z "$DISPLAY" ] && command -v xvfb-run > /dev/null && PVBATCH="xvfb-run -a $PVBATCH"
+if command -v pvbatch > /dev/null; then
+    echo "Running tools/viewMesh.py (ParaView) on $PWD"
+    $PVBATCH tools/viewMesh.py > log.viewMesh 2>&1 || {
+        echo "mesh images failed, last lines of log.viewMesh:"; tail -5 log.viewMesh; }
+else
+    echo "pvbatch not found: no mesh images"
+fi
+
+#- mesh report: report/mesh/mesh.pdf (open it yourself)
+moveLogs
+scripts/report mesh > logs/log.meshReport 2>&1
+tail -1 logs/log.meshReport

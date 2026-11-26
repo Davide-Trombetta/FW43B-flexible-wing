@@ -1,0 +1,27 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Pressure coefficient Cp = (p - pInf)/(0.5 UInf^2)
+// (incompressible solver: p is kinematic, so rho = 1)
+// ESI: mode staticCoeff (OpenFOAM.org: calcTotal no; calcCoeff yes)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshParameters"
+
+type            pressure;
+libs            (fieldFunctionObjects);
+writeControl    writeTime;
+
+mode            staticCoeff;
+rho             rhoInf;
+rhoInf          1;
+pRef            0;
+pInf            0;
+UInf            ($uInf 0 0);
+result          Cp;
+
+// ************************************************************************* //

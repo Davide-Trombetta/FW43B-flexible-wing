@@ -1,0 +1,51 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      caseSettings;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// Flow conditions, used by the fields in 0.orig.
+
+#include "$FOAM_CASE/system/meshParameters"
+
+turbulenceIntensity 0.0025;
+viscosityRatio      10;
+turbulenceModel     kOmegaSST;  // RAS model (constant/turbulenceProperties):
+                                // kOmegaSST or realizableKE
+a1                  0.31;   // [validation] k-omega SST: Bradshaw constant of the
+                            // shear-stress limiter (Menter 1994; 0.31 is the
+                            // default). The job script sets it with -v A1=<value>
+
+// Report: Q-criterion iso-surface at Q = QStar (uInf/H)^2 (H wing height)
+QStar               1;
+
+// Simulation length (scripts/convergenceMonitor, started by Allrun): the run
+// stops when the standard errors and the drifts of the mean Cd and Cl over
+// the stable part are below this fraction of the mean Cd (Cl on the scale of
+// Cd too: stricter for a wing, whose |Cl| is larger than Cd); endTime
+// (system/controlDict) is only an upper bound.
+// Remove it to run to endTime.
+cdTolerance         0.01;   // 1 %
+// minStableIterations 1000;  minimum length of the stable part
+
+// Computed (ESI: #eval, the built-in expression parser; #calc of the Ahmed
+// case compiles C++ code at run time, slower and refused for the root user)
+flowVelocity        ($uInf 0 0);
+pressure            0;       // kinematic gauge pressure [m2/s2]
+turbulentKE         #eval{ 1.5*sqr($uInf*$turbulenceIntensity) };
+turbulentOmega      #eval{ 1.5*sqr($uInf*$turbulenceIntensity)/($nu*$viscosityRatio) };
+turbulentEpsilon    #eval{ 0.09*sqr(1.5*sqr($uInf*$turbulenceIntensity))/($nu*$viscosityRatio) };
+potentialInit       yes;     // initialise U with potentialFoam (new runs only)
+
+// ************************************************************************* //

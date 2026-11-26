@@ -1,0 +1,4 @@
+alpha_quoted_deg,alpha_true_deg,CL,CD,state,source_CL,source_CD
+1,3.45,0.69,0.020,attached,"thesis p.37 (text, freestream value at the reference incidence); Fig. 4a gives 0.70","Fig. 4b, read at CL = 0.69-0.70"
+11,13.45,1.34,0.098,"maximum downforce, trailing-edge separation starts at the wing centre","Fig. 4a (text p.31: CLmax = 1.35 at 11.3 deg)","Fig. 4b, point of maximum CL"
+13,15.45,1.32,0.14,"separated at the wing centre (plateau after CLmax)","Fig. 4a","Fig. 4b"

@@ -1,0 +1,40 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Streamlines of the results report: from a grid H/4 behind the trailing
+// point, over the lower half of the wing height and the middle half of the
+// span: the wake and the tip vortices of the endplates.
+// Run in parallel at the last time by scripts/report (system/reportFunctions).
+// Seeds and tracking steps: scripts/postSetup (system/reportGeometry,
+// streamLifeTime in system/meshVariables)
+// ESI: type streamLine, seeds "cloud", direction bidirectional
+// (OpenFOAM.org: streamlines.cfg, seeds "points", direction both)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshVariables"
+#include "reportGeometry"
+
+type            streamLine;
+libs            (fieldFunctionObjects);
+writeControl    writeTime;
+setFormat       vtk;
+
+U               U;
+fields          (U);
+direction       bidirectional;
+lifeTime        $streamLifeTime;
+nSubCycle       5;
+cloud           wakeTracks;
+
+seedSampleSet
+{
+    type        cloud;
+    axis        xyz;
+    points      $wakeSeeds;
+}
+
+// ************************************************************************* //

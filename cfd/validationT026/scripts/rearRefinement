@@ -1,0 +1,76 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+#  rearRefinement -- refinement around the slant (rear upper surface that
+#                    slopes down) and the end of the roof before it
+#
+#  In:   system/meshParameters (rearRefinement, rearDistance, rearUpstream),
+#        system/meshVariables (bodyHeight, levelSurface, surfaceCell)
+#  Out:  constant/triSurface/rearSurface.stl   the faces to refine around
+#                                            (tools/rearSurface.py)
+#        system/meshVariables
+#          levelRear          levelSurface + 1 (half the surface cell)
+#          rearDistanceMesh   thickness of the refined region          [m]
+#          slantAngle         mean inclination of the slant            [deg]
+#          rearArea           area of the surface refined around       [m^2]
+#        system/rearRegions   dictionaries for snappyHexMeshDict:
+#          rearGeometry       the surface (geometry)
+#          rearRegions        distance refinement (refinementRegions)
+#          both empty with rearRefinement no, or if the STL has no slant
+#
+#  Why: at the roof/slant edge the flow separates; the boundary layer that
+#  reaches the edge, the separated shear layer and the slant decide the
+#  pressure on the slant (most of the drag and lift of the rear end). A fine
+#  first layer alone does not resolve them.
+#  The level is one above the body surface, so M and L refine it with the
+#  rest of the mesh (same design, finer cells everywhere).
+#  The faces of the slant are found from the STL (outward normal facing
+#  downstream and up, rear half of refRegion), not given by hand: any body
+#  with a sloping rear end gets the same refinement.
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+. scripts/functions
+
+empty () {
+    cat > system/rearRegions <<'EOD'
+// rearRegions -- written by scripts/rearRefinement: do not edit by hand.
+rearGeometry {}
+rearRegions  {}
+EOD
+    setVar levelRear none
+    echo "rear refinement: $1"
+    exit 0
+}
+[ "${rearRefinement:-no}" = yes ] || empty "off (rearRefinement no)"
+
+OUT=constant/triSurface/rearSurface.stl
+eval "$(python3 tools/rearSurface.py constant/triSurface/$stlFile $refRegion \
+        $(calc "${rearUpstream:-0.25} * $bodyHeight") $OUT)" ||
+    { echo "rearSurface.py failed"; exit 1; }
+[ "${REAR_FACES:-0}" -gt 0 ] || { rm -f $OUT; empty "no sloping rear surface in $refRegion"; }
+
+setVar levelRear        $((levelSurface + 1))
+setVar rearDistanceMesh $(calc "${rearDistance:-0.1} * $bodyHeight")
+setVar slantAngle       $REAR_ANGLE
+setVar rearArea         $REAR_AREA
+cat > system/rearRegions <<EOD
+// rearRegions -- written by scripts/rearRefinement: do not edit by hand.
+// Included by snappyHexMeshDict (geometry, refinementRegions).
+rearGeometry
+{
+    rearSurface
+    {
+        type triSurfaceMesh;
+        file "rearSurface.stl";
+    }
+}
+rearRegions
+{
+    rearSurface
+    {
+        mode    distance;
+        levels  ((\$rearDistanceMesh \$levelRear));
+    }
+}
+EOD
+echo "rear refinement: slant at $REAR_ANGLE deg, $REAR_FACES faces from x = $REAR_XMIN m"
+echo "   level $levelRear ($(calc "$surfaceCell / 2") m) within $rearDistanceMesh m"

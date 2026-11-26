@@ -1,0 +1,72 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Sections and wall surfaces with their fields, legacy VTK (ASCII) at every
+// write time: postProcessing/wingSurfaces/<time>/<surface>.vtk
+// (named "surfaces" in the Ahmed-body case: in ESI a function file that
+// contains a dictionary with its own name, here the "surfaces" list, is
+// read as that dictionary, so the function needs another name)
+//   walls      the regions of the STL, face values: images of the report and
+//              input of fsi/map_pressure.py (field p, kinematic)
+//   midPlane   wing section y = cutY (sectionY in meshParameters)
+//   wakePlane  cross-section of the near wake
+// Positions from scripts/postSetup (meshVariables)
+// ESI: type cuttingPlane with pointAndNormalDict (OpenFOAM.org: cutPlane)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "meshVariables"
+
+type            surfaces;
+libs            (sampling);
+writeControl    writeTime;
+
+surfaceFormat   vtk;
+formatOptions
+{
+    vtk
+    {
+        legacy      true;       // .vtk, read by fsi/map_pressure.py
+        format      ascii;
+    }
+}
+interpolationScheme cellPoint;
+
+fields          (p U Cp Cp0 yPlus wallShearStress);
+
+surfaces
+{
+    midPlane
+    {
+        type            cuttingPlane;
+        planeType       pointAndNormal;
+        pointAndNormalDict
+        {
+            point       (0 $cutY 0);
+            normal      (0 1 0);
+        }
+        interpolate     true;
+    }
+    wakePlane
+    {
+        type            cuttingPlane;
+        planeType       pointAndNormal;
+        pointAndNormalDict
+        {
+            point       ($cutX 0 0);
+            normal      (1 0 0);
+        }
+        interpolate     true;
+    }
+    walls                       // the regions of the STL: face values
+    {
+        type            patch;
+        patches         $wallPatches;
+        interpolate     false;
+    }
+}
+
+// ************************************************************************* //

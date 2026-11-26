@@ -1,0 +1,172 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+#  geometryInfo -- measures the STL
+#
+#  In:   stlFile, refRegion, halfModel, groundContact, groundGap, refArea
+#        (meshParameters)
+#  Out:  system/meshVariables
+#          stlXmin..stlZmax  bounding box of the whole surface     [m]
+#          wallPatches       the regions of the STL: wall patches (list)
+#          bodyLength        L, body length (x)                    [m]
+#          bodyHalfWidth     W, half width of the body             [m]
+#          yCentre           y of the symmetry plane (half model) or of
+#                            the centre of the body (whole body)   [m]
+#          bodyHeight        H, height of refRegion                [m]
+#          bodyTop           z of the top of the STL               [m]
+#          wingTop, wingHeight   top and height of refRegion (post) [m]
+#                            (refRegion: one region or a list; the
+#                            bounding box of all of them)
+#          refLength         x length of refRegion: lRef (chord)   [m]
+#          xCofR, zCofR      moment centre: quarter of refLength,
+#                            mid-height of refRegion               [m]
+#          refAreaValue      Aref of forceCoeffs (refArea)         [m^2]
+#          ground            z of the ground plane                 [m]
+#          wettedArea        area of all the regions               [m^2]
+#          frontalArea       area projected on the y-z plane       [m^2]
+#          planformArea      area projected on the x-y plane       [m^2]
+#        system/stlRegions   the regions in the three blocks of
+#                            snappyHexMeshDict (geometry, surface
+#                            refinement, layers): any STL, no editing
+#        system/regionForces one forces function per region
+#                            (postProcessing/forces_<region>/): lift
+#                            and drag of each part of the wing
+#
+#  surfaceCheck (OpenFOAM) checks the surface quality; stlInfo (tools/, C++)
+#  gives what OpenFOAM does not print: the bounding box of each region and
+#  the wetted and frontal areas.
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+. scripts/functions
+STL=constant/triSurface/$stlFile     # OpenFOAM.org: constant/geometry
+[ -f "$STL" ] || { echo "$STL not found: run Allrun.pre -angle <deg>"; exit 1; }
+
+# 1. surface quality: stop if the STL has illegal triangles
+surfaceCheck "$STL" > log.surfaceCheck 2>&1 || { echo "surfaceCheck failed"; exit 1; }
+grep -q "Surface has no illegal triangles" log.surfaceCheck \
+    || { echo "STL has illegal triangles, see log.surfaceCheck"; exit 1; }
+
+# 2. sizes and areas (stlInfo is compiled the first time it is needed)
+EXE=tools/bin/stlInfo
+# if [ ! -x $EXE ] || [ $EXE.cpp -nt $EXE ]; then
+#     g++ -O2 -std=c++17 -o $EXE $EXE.cpp || { echo "cannot compile stlInfo"; exit 1; }
+# fi
+eval "$($EXE -shell "$STL")" || exit 1
+
+setVar stlXmin $STL_XMIN;  setVar stlXmax $STL_XMAX
+setVar stlYmin $STL_YMIN;  setVar stlYmax $STL_YMAX
+setVar stlZmin $STL_ZMIN;  setVar stlZmax $STL_ZMAX
+setVar wallPatches "($STL_REGIONS)"
+# refRegion: one region or a list "(a b ...)": bounding box of all of them
+REFS=$(echo "$refRegion" | tr -d '()')
+RXMIN=; RXMAX=; RZMIN=; RZMAX=
+for r in $REFS; do
+    case " $STL_REGIONS " in
+        *" $r "*) ;;
+        *) echo "refRegion $r is not a region of the STL ($STL_REGIONS)"; exit 1 ;;
+    esac
+    eval a=\$STL_${r}_XMIN b=\$STL_${r}_XMAX c=\$STL_${r}_ZMIN d=\$STL_${r}_ZMAX
+    # (the conditions in parentheses: a bare ">" in awk's printf is a redirection)
+    RXMIN=$(calc "(${RXMIN:-$a} < $a) ? ${RXMIN:-$a} : $a"); RXMAX=$(calc "(${RXMAX:-$b} > $b) ? ${RXMAX:-$b} : $b")
+    RZMIN=$(calc "(${RZMIN:-$c} < $c) ? ${RZMIN:-$c} : $c"); RZMAX=$(calc "(${RZMAX:-$d} > $d) ? ${RZMAX:-$d} : $d")
+done
+setVar bodyLength    $(calc "$STL_XMAX - $STL_XMIN")
+# validation case: chord and span fixed (meshParameters chord, span), not
+# measured on the rotated STL, so that lRef and Aref are the same at every
+# angle of attack (the projections shrink with cos(alpha))
+CHORD=${chord:-$(calc "$RXMAX - $RXMIN")}
+# validation case: L and H of the FW43B wing in chords (lengthScale,
+# heightScale of meshParameters): domain, refinement boxes and wake boxes,
+# all given in L, W and H, then have the same size in chords as in the
+# FW43B case
+[ -n "$lengthScale" ] && setVar bodyLength $(calc "$lengthScale * $CHORD")
+if [ "$halfModel" = yes ]; then         # STL cut by the plane y = y min
+    setVar bodyHalfWidth $(calc "$STL_YMAX - $STL_YMIN")
+    setVar yCentre       $STL_YMIN
+else                                    # whole body
+    setVar bodyHalfWidth $(calc "($STL_YMAX - $STL_YMIN) / 2")
+    setVar yCentre       $(calc "($STL_YMAX + $STL_YMIN) / 2")
+fi
+setVar bodyHeight    $(calc "$RZMAX - $RZMIN")
+[ -n "$heightScale" ] && setVar bodyHeight $(calc "$heightScale * $CHORD")
+setVar bodyTop       $(calc "($STL_ZMAX > $RZMAX) ? $STL_ZMAX : $RZMAX")
+# validation case: the wing itself (refRegion), for the post-processing
+# (sections, wake profiles, frames of the images): bodyHeight is scaled
+# (heightScale) and bodyTop is the top of the endplates, both for the mesh
+setVar wingTop       $RZMAX
+setVar wingHeight    $(calc "$RZMAX - $RZMIN")
+setVar refLength     $CHORD
+setVar xCofR         $(calc "$RXMIN + 0.25 * $refLength")
+setVar zCofR         $(calc "($RZMIN + $RZMAX) / 2")
+# bounding box of the last element (scripts/snappySetup: box of its wake):
+# the flap in the FW43B case; here the single element, the region wing
+[ -n "$STL_wing_XMIN" ] || { echo "no region wing in the STL"; exit 1; }
+setVar flapXmin $STL_wing_XMIN;  setVar flapXmax $STL_wing_XMAX
+setVar flapYmin $STL_wing_YMIN;  setVar flapYmax $STL_wing_YMAX
+setVar flapZmin $STL_wing_ZMIN;  setVar flapZmax $STL_wing_ZMAX
+setVar elementsArea $STL_wing_AREA   # [m2] (elements.stl = the wing without the endplates)
+if [ "$groundContact" = yes ]; then
+    # ground: lowest point rounded up to the millimetre, so that the legs
+    # cross the ground plane (as in the original case)
+    groundMm=$(ceil "$STL_ZMIN * 1000")          # lowest point rounded up, in mm
+    setVar ground $(calc "$groundMm / 1000")
+else
+    setVar ground $(calc "$STL_ZMIN - $groundGap * $bodyHeight")
+fi
+setVar wettedArea   $STL_AREA
+setVar frontalArea  $STL_AFRONT
+setVar planformArea $STL_APLAN
+case "${refArea:-frontal}" in
+    chordSpan) setVar refAreaValue $(calc "$CHORD * $span") ;;   # c s, as in the reference
+    planform) setVar refAreaValue $planformArea ;;
+    frontal)  setVar refAreaValue $frontalArea ;;
+    *) echo "refArea must be chordSpan, planform or frontal (system/meshParameters)"; exit 1 ;;
+esac
+
+# the regions of the STL in the blocks of snappyHexMeshDict ($levelSurface
+# and $nLayers: system/meshVariables, included before this file)
+{   echo "// stlRegions -- written by scripts/geometryInfo from the regions of the"
+    echo "// STL: do not edit by hand. Included by system/snappyHexMeshDict."
+    echo
+    echo "wallGeometry"
+    echo "{"
+    for r in $STL_REGIONS; do echo "    $r { name $r; }"; done   # patch = region name
+    echo "}"
+    echo "wallSurfaces"
+    echo "{"
+    for r in $STL_REGIONS; do
+        echo "    $r { level (\$levelSurface \$levelSurface);"
+        echo "         patchInfo { type wall; inGroups (walls); } }"
+    done
+    echo "}"
+    echo "wallLayers"
+    echo "{"
+    for r in $STL_REGIONS; do echo "    $r { nSurfaceLayers \$nLayers; }"; done
+    echo "}"
+} > system/stlRegions
+
+# one forces function per region (included by system/functions): the lift
+# and drag of each part of the wing, every iteration, in
+# postProcessing/forces_<region>/<start>/force.dat
+{   echo "// regionForces -- written by scripts/geometryInfo: do not edit by hand."
+    echo "// Included by system/functions: forces of each region of the STL."
+    echo
+    for r in $STL_REGIONS; do
+        echo "forces_$r"
+        echo "{"
+        echo "    type        forces;"
+        echo "    libs        (forces);"
+        echo "    writeControl timeStep;"
+        echo "    writeInterval 1;"
+        echo "    log         false;"
+        echo "    patches     ($r);"
+        echo "    rho         rhoInf;"
+        echo "    rhoInf      $rhoInf;"
+        echo "    CofR        ($xCofR $yCentre $zCofR);"
+        echo "}"
+    done
+} > system/regionForces
+
+echo "geometry: L = $bodyLength m, W = $bodyHalfWidth m, H = $bodyHeight m"
+echo "   walls: $STL_REGIONS (H from $REFS); half model: $halfModel; ground contact: $groundContact, ground plane: ${groundPlane:-wall}"
+echo "   wetted area $wettedArea m2, frontal area $frontalArea m2, planform area $planformArea m2 ($([ "$halfModel" = yes ] && echo "half model" || echo "whole body"))"
+echo "   coefficients: lRef = $refLength m, Aref = $refAreaValue m2 ($refArea), CofR ($xCofR $yCentre $zCofR)"

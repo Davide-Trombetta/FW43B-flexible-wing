@@ -1,0 +1,83 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+#  backgroundMesh -- domain and background mesh (used by blockMeshDict)
+#
+#  Usage: scripts/backgroundMesh
+#
+#  In:   system/meshParameters, system/meshVariables
+#  Out:  system/meshVariables
+#          xMin..zMax        domain bounds                               [m]
+#          nx ny nz          background cells
+#          backgroundCell    background cell size                        [m]
+#          levelSurface      refinement level of the body surface
+#          surfaceCell       surface cell = backgroundCell / 2^levelSurface
+#
+#  Domain:
+#    x: upstream and downstream body lengths L before the nose / after the base
+#    y: domainWidth body half-widths W from the symmetry plane (half
+#       model), or on each side of the body centre (whole body)
+#    z: domainHeight body heights H from the ground (groundPlane wall: a
+#       no-slip wall; none: the bottom face is free stream as the sides,
+#       for a body far from any ground, as the isolated wing)
+#    check: frontal area / cross-section must not exceed blockage
+#  Background cell: the surface cell doubled levelSurface times, with
+#    levelSurface such that the smallest domain side of mesh S has about
+#    minDimCells cells. So the body surface gets exactly the cell size
+#    required by the boundary layer (scripts/boundaryLayer).
+#  Sizes M and L: same levels as S, with the smaller surface cell of their
+#    finalLayerThickness; so every cell of the mesh (background, boxes,
+#    surface) is smaller than in S by the same refinement ratio.
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+. scripts/functions
+
+# 1. domain
+setVar xMin $(calc "$stlXmin - $upstream * $bodyLength")
+setVar xMax $(calc "$stlXmin + (1 + $downstream) * $bodyLength")
+# blockMeshDict faces: (3 7 6 2) y = yMax, (4 5 6 7) top, (1 5 4 0) y = yMin,
+# (0 3 2 1) bottom
+FREE="(3 7 6 2) (4 5 6 7)"
+if [ "$halfModel" = yes ]; then
+    setVar yMin $stlYmin
+    setVar yMax $(calc "$stlYmin + $domainWidth * $bodyHalfWidth")
+    # the face y = yMin is the symmetry plane
+    setVar midPlaneFaces   "((1 5 4 0))"
+else
+    setVar yMin $(calc "$yCentre - $domainWidth * $bodyHalfWidth")
+    setVar yMax $(calc "$yCentre + $domainWidth * $bodyHalfWidth")
+    # no symmetry plane: the face y = yMin is free stream as y = yMax
+    setVar midPlaneFaces   "()"
+    FREE="$FREE (1 5 4 0)"
+fi
+case "${groundPlane:-wall}" in
+    wall) setVar groundFaces "((0 3 2 1))" ;;
+    none) setVar groundFaces "()"; FREE="$FREE (0 3 2 1)" ;;   # free stream below
+    *)    echo "groundPlane must be wall or none (system/meshParameters)"; exit 1 ;;
+esac
+setVar freestreamFaces "($FREE)"
+setVar zMin $ground
+setVar zMax $(calc "$ground + $domainHeight * $bodyHeight")
+BLOCK=$(calc "$frontalArea / (($yMax - $yMin) * ($zMax - $zMin))")
+if check "$BLOCK > $blockage"; then
+    echo "blockage $(calc "$BLOCK * 100") % is above $(calc "$blockage * 100") %:"
+    echo "increase domainWidth or domainHeight in system/meshParameters"
+    exit 1
+fi
+
+# 2. background cell and level of the body surface
+DMIN=$(calc "($yMax - $yMin < $zMax - $zMin) ? $yMax - $yMin : $zMax - $zMin")
+LS=$(round "log($DMIN / $minDimCells / $surfaceCellS) / log(2)")
+WD=${wakeLevelDrop:-2}
+[ "$LS" -ge "$WD" ] || LS=$WD                # the wake box is at LS - wakeLevelDrop >= 0
+setVar levelSurface   $LS
+setVar backgroundCell $(calc "$surfaceCellTarget * 2^$LS")
+setVar surfaceCell    $(calc "$backgroundCell / 2^$LS")
+
+setVar nx $(round "($xMax - $xMin) / $backgroundCell")
+setVar ny $(round "($yMax - $yMin) / $backgroundCell")
+setVar nz $(round "($zMax - $zMin) / $backgroundCell")
+
+echo "domain: ($xMin $yMin $zMin) - ($xMax $yMax $zMax)"
+echo "   width $domainWidth W, height $domainHeight H, blockage $(calc "$BLOCK * 100") %"
+echo "   background: $nx x $ny x $nz cells of $backgroundCell m"
+echo "   body surface: level $levelSurface, cell $surfaceCell m"

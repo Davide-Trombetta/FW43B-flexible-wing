@@ -1,0 +1,20 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Initial residuals of every equation, every iteration (convergence):
+// postProcessing/solverInfo/<start>/solverInfo.dat
+// ESI v2306: type solverInfo (OpenFOAM.org: residuals.cfg, type residuals)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+type            solverInfo;
+libs            (utilityFunctionObjects);
+fields          (U p k omega);
+writeResidualFields no;
+writeControl    timeStep;
+writeInterval   1;
+
+// ************************************************************************* //

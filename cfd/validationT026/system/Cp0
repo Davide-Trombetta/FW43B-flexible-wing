@@ -1,0 +1,18 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Total pressure coefficient Cp0: 1 in the free stream, lower in the wake
+// and in the vortex cores (losses). Same settings as Cp, with total pressure
+// ESI: mode totalCoeff (OpenFOAM.org: calcTotal yes)
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "Cp"
+
+mode            totalCoeff;
+result          Cp0;
+
+// ************************************************************************* //

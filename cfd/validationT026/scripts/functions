@@ -1,0 +1,106 @@
+#------------------------------------------------------------------------------
+#  functions 
+#
+#  The scripts exchange data through two files in OpenFOAM syntax, which the
+#  mesh dictionaries include with #include:
+#    system/meshParameters   values chosen by hand          (read only)
+#    system/meshVariables    values computed by the scripts (read and written)
+#  Each line "name value;" becomes the bash variable $name, and in the
+#  dictionaries the same value is used as $name.
+#------------------------------------------------------------------------------
+
+PARAMS=system/meshParameters
+VARS=system/meshVariables
+
+#- dictionaries --------------------------------------------------------------
+
+# readDict <file>: defines a bash variable for each "name value;" line
+# (ESI foamDictionary -keywords lists the FoamFile header too: skipped;
+# OpenFOAM.org stops at it, hence the "break" of the Ahmed-body version)
+readDict () {
+    [ -f "$1" ] || return 0
+    for kw in $(foamDictionary -keywords "$1" 2> /dev/null); do
+        case "$kw" in
+            FoamFile) continue ;;
+            '#'*) break ;;
+        esac
+        value=$(foamDictionary -entry "$kw" -value "$1" 2> /dev/null) || continue
+        # a sub-dictionary (several lines) is not a variable
+        [ "$(printf '%s\n' "$value" | wc -l)" -le 1 ] || continue
+        if echo "$value" | grep '[[:space:]]' | grep -q -v '^".*"$'; then
+            value="\"$value\""
+        fi
+        eval "$kw=$value"
+    done
+}
+
+# setLine <entry> <value> <file>: writes "entry value;" in a dictionary,
+# replacing the value of a top-level line "entry ...;" (its comment is kept)
+# or appending the line. Why not foamDictionary -set: in ESI v2306 it
+# rewrites the whole file, removing every comment and expanding (or, with
+# -disableFunctionEntries, keeping) the #include lines: system/controlDict
+# and system/meshParameters would lose their documentation.
+setLine () {
+    if grep -q "^[[:space:]]*$1[[:space:]]" "$3" 2> /dev/null; then
+        sed -i "s|^\([[:space:]]*$1[[:space:]]\{1,\}\)[^;]*;|\1$2;|" "$3"
+    else
+        echo "$1 $2;" >> "$3"
+    fi
+}
+
+# setVar <name> <value>: writes (or replaces) "name value;" in meshVariables
+setVar () {
+    [ -n "$2" ] || { echo "setVar $1: empty value" >&2; exit 1; }
+    [ -f $VARS ] || printf '%s\n' \
+        "// meshVariables -- written by the scripts in scripts/: do not edit by hand." \
+        "// Included by the mesh dictionaries (#include \"meshVariables\")." "" > $VARS
+    setLine "$1" "$2" $VARS
+    eval "$1=\"$2\""
+}
+
+# getEntry <entry> <dict>: value of an entry; stops if it is missing
+getEntry () {
+    foamDictionary -entry "$1" -value "$2" 2> /dev/null ||
+        { echo "getEntry: '$1' not found in $2" >&2; exit 1; }
+}
+
+# setEntry <entry> <value> <dict>: writes the entry (added if missing)
+setEntry () { setLine "$1" "$2" "$3"; }
+
+#- arithmetic ----------------------------------------------------------------------
+
+# calc "<expression>": decimal result, 6 significant digits
+calc () { awk "BEGIN { printf \"%.6g\", $1 }"; }
+
+# fmt <decimals> "<expression>": fixed number of decimals
+fmt ()   { awk "BEGIN { printf \"%.$1f\", $2 }"; }
+
+# check "<condition>": exit status 0 if true, 1 if false    if check "$a < $b"
+check () { awk "BEGIN { exit !($1) }"; }
+
+# ceil, round "<expression>": integer arithmetic with rounding: ceil, round
+ceil ()  { awk "BEGIN { x = $1; i = int(x); if (i < x) i++; print i }"; }
+round () { awk "BEGIN { x = $1; print int(x + 0.5) }"; }
+
+
+#- histories of the function objects (scripts/history) --------------------------
+
+# forceCoeffs: ESI v2306 coefficient.dat (Cd, Cl, CmPitch... in its own
+# order), OpenFOAM.org forceCoeffs.dat (Cm Cd Cl Cl(f) Cl(r)): the columns
+# are taken by name, always in the order  Time Cm Cd Cl Cl(f) Cl(r)
+COEFFS_FILES="coefficient.dat|forceCoeffs.dat"
+COEFFS_COLS="CmPitch|Cm Cd Cl Cl(f) Cl(r)"
+coeffHistory () { scripts/history forceCoeffs "$COEFFS_FILES" $COEFFS_COLS; }
+
+# forces (also forces_<region>): ESI v2306 force.dat, always in the order
+# Time  Fp_x Fp_y Fp_z  Fv_x Fv_y Fv_z   (pressure, viscous)   [N]
+FORCE_COLS="pressure_x pressure_y pressure_z viscous_x viscous_y viscous_z"
+forceHistory () { scripts/history ${1:-forces} force.dat $FORCE_COLS; }
+
+# the solver: simpleFoam (OpenFOAM.org: foamRun -solver incompressibleFluid)
+SOLVER=$(foamDictionary -disableFunctionEntries -entry application -value system/controlDict 2> /dev/null)
+SOLVER=${SOLVER:-simpleFoam}
+
+# all scripts work from the case directory with every value already known
+readDict $PARAMS
+readDict $VARS

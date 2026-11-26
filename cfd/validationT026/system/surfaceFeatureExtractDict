@@ -1,0 +1,60 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      surfaceFeatureExtractDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// ESI: one sub-dictionary per surface (OpenFOAM.org surfaceFeaturesDict:
+// a "surfaces" list and the settings at the top level). The keyword is the
+// name of the output, constant/triSurface/wing.eMesh (eMeshFile in
+// system/meshParameters); the STL is stlFile, copied by Allrun.pre.
+
+#include "meshParameters"
+
+wing    // [validation] output: constant/triSurface/wing.eMesh (eMeshFile)
+{
+    surfaces            ($stlFile);
+
+    extractionMethod    extractFromSurface;
+
+    extractFromSurfaceCoeffs
+    {
+        // Mark edges whose adjacent surface normals are at an angle less
+        // than includedAngle as features
+        includedAngle       $includedAngle;
+
+        // Include region boundaries as features
+        geometricTestOnly   no;
+    }
+
+    subsetFeatures
+    {
+        // Include nonManifold edges (edges with >2 connected faces)
+        nonManifoldEdges    yes;
+
+        // Include open edges (edges with 1 connected face)
+        openEdges           no;
+    }
+
+    trimFeatures
+    {
+        minElem         0;
+        minLen          0.0;
+    }
+
+    // Write features to obj format for visualisation
+    writeObj            yes;
+}
+
+// ************************************************************************* //

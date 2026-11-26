@@ -1,0 +1,35 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Function objects run with the solver, included in the "functions"
+// sub-dictionary of controlDict (no FoamFile header here: this file is
+// #included inside it). Each one is in its own file of system/ (same name),
+// included with #includeFunc (ESI looks in system/ first, then in
+// etc/caseDicts/postProcessing); yPlus, wallShearStress, vorticity, Q and
+// CourantNo are the standard ones of etc/caseDicts/postProcessing/fields.
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#includeFunc solverInfo     // system/solverInfo:  residuals (OpenFOAM.org: residuals)
+#includeFunc yPlus          // standard:           y+ on the walls
+#includeFunc forceCoeffs    // system/forceCoeffs: Cd, Cl, Cm of the whole wing
+#includeFunc forces         // system/forces:      forces in N, pressure/viscous
+#sinclude "regionForces"     // forces of each STL region (scripts/geometryInfo;
+                            // #sinclude: skipped if not written yet)
+#includeFunc Cp             // system/Cp:          pressure coefficient
+#includeFunc Cp0            // system/Cp0:         total pressure coefficient
+#includeFunc inletPressure  // system/inletPressure: mean p on the inlet
+// fields at the write times only (standard functions, etc/caseDicts):
+#includeFunc wallShearStress // shear stress on the walls (tau_w)
+#includeFunc vorticity      // curl of U
+#includeFunc Q              // Q-criterion (vortex cores)
+#includeFunc CourantNo      // local Courant number (pseudo-time step)
+// after the fields above, since they sample them:
+#includeFunc profiles       // system/profiles:    lines in the wake
+#includeFunc wingSurfaces   // system/wingSurfaces: sections, walls (VTK);
+                            // walls.vtk is the input of fsi/map_pressure.py
+
+// ************************************************************************* //

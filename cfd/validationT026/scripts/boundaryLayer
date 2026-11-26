@@ -1,0 +1,67 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+#  boundaryLayer -- near-wall mesh design
+#
+#  Usage: scripts/boundaryLayer [S|M|L]      mesh size (default S)
+#
+#  In:   meshParameters: uInf, nu, cf, yPlus, nWallLayers, expansionRatio,
+#        finalLayerThicknessS, finalLayerThicknessM, finalLayerThicknessL
+#  Out:  system/meshVariables
+#          uTau              friction velocity                       [m/s]
+#          firstLayer        first-layer thickness h1 for the y+     [m]
+#          nLayersDesign     number of layers (nWallLayers)
+#          layerStack        thickness of the layer stack            [m]
+#          lastLayer         thickness of the last layer             [m]
+#          meshSize          S, M or L
+#          finalLayerThickness   last layer / surface cell for this size
+#          surfaceCellTarget surface cell: last layer / finalLayerThickness
+#          surfaceCellS      surface cell of mesh S (fixes the levels)
+#
+#          u_tau = U sqrt(Cf / 2),   y1 = y+ nu / u_tau
+#          h1 = 2 y1                  (first-layer thickness, cell centre y1)
+#          h_j = h1 r^(j-1),   T = h1 (r^N - 1) / (r - 1)
+#          N is chosen (nWallLayers): the stack thickness T follows
+#------------------------------------------------------------------------------
+cd "${0%/*}/.." || exit 1
+. scripts/functions
+R=$expansionRatio
+
+SIZE=${1:-S}
+case "$SIZE" in
+    S|M|L) ;;
+    *) echo "mesh size must be S, M or L (got '$SIZE')"; exit 1 ;;
+esac
+setVar meshSize $SIZE
+eval FLT=\$finalLayerThickness$SIZE
+eval FLTS=\$finalLayerThicknessS
+for v in "S $finalLayerThicknessS" "M $finalLayerThicknessM" "L $finalLayerThicknessL"; do
+    set -- $v
+    if ! check "$2 > 0 && $2 < 1"; then
+        echo "finalLayerThickness$1 = $2: it must be between 0 and 1"
+        echo "(last layer thinner than the surface cell), see system/meshParameters"
+        exit 1
+    fi
+done
+if ! check "$finalLayerThicknessS < $finalLayerThicknessM && $finalLayerThicknessM < $finalLayerThicknessL"; then
+    echo "finalLayerThickness must grow from S to M to L (finer meshes)"
+    exit 1
+fi
+setVar finalLayerThickness $FLT
+
+setVar uTau          $(calc "$uInf * sqrt($cf / 2)")
+setVar firstLayer    $(calc "2 * $yPlus * $nu / $uTau")
+setVar nLayersDesign $nWallLayers
+setVar layerStack    $(calc "$firstLayer * ($R^$nLayersDesign - 1) / ($R - 1)")
+setVar lastLayer     $(calc "$firstLayer * $R^($nLayersDesign - 1)")
+
+# the last layer is finalLayerThickness times the surface cell: this fixes
+# the cell size on the body, and from it every cell of the mesh. The cell of
+# mesh S fixes the refinement levels (scripts/backgroundMesh), the same for
+# every size, so M and L scale every region of S by the same factor.
+setVar surfaceCellTarget $(calc "$lastLayer / $finalLayerThickness")
+setVar surfaceCellS      $(calc "$lastLayer / $FLTS")
+
+echo "near wall: Cf = $cf, u_tau = $uTau m/s, y+ = $yPlus -> first layer $firstLayer m"
+echo "   $nLayersDesign layers, ratio $R: stack $layerStack m, last layer $lastLayer m"
+echo "   mesh $meshSize: finalLayerThickness $finalLayerThickness, surface cell (target) = $surfaceCellTarget m"
+echo "   refinement ratio from S: $(calc "$surfaceCellS / $surfaceCellTarget")"

@@ -1,0 +1,47 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://www.openfoam.com
+    \\  /    A nd           | Version:  v2306
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+application     simpleFoam;     // OpenFOAM.org: solver incompressibleFluid
+                                // (foamRun); ESI: one executable per solver
+
+startFrom       latestTime;
+startTime       0;
+stopAt          endTime;        // scripts/convergenceMonitor sets writeNow
+endTime         10000;           // upper bound: the run normally stops earlier
+deltaT          1;
+
+writeControl    timeStep;
+writeInterval   200;
+purgeWrite      2;
+
+writeFormat     binary;         // smaller and faster time folders (ascii in
+writePrecision  8;              // the Ahmed case)
+writeCompression off;
+timeFormat      general;
+timePrecision   6;
+
+runTimeModifiable true;         // read again at every iteration: needed by
+                                // the stop of scripts/convergenceMonitor
+
+// OpenFOAM.org reads system/functions by itself; ESI only reads the
+// "functions" sub-dictionary of controlDict, so the file is included here
+functions
+{
+    #include "functions"
+}
+
+// ************************************************************************* //
